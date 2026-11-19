@@ -1,0 +1,63 @@
+{
+  "name": "dsh-peak-price-pal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A DeepSeek Harness plugin: a small sun or moon under the composer shows whether DeepSeek is billing at peak or off-peak rates.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DevTarlow/dsh-peak-price-pal.git"
+  },
+  "homepage": "https://github.com/DevTarlow/dsh-peak-price-pal#readme",
+  "bugs": {
+    "url": "https://github.com/DevTarlow/dsh-peak-price-pal/issues"
+  },
+  "icon": "./icon.svg",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --check index.js && node --check client.js && node test/client.test.mjs"
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh-plugin",
+    "pricing",
+    "peak",
+    "off-peak",
+    "china-holidays",
+    "composer"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}

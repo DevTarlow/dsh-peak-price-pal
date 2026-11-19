@@ -1,0 +1,8 @@
+# Peak Price Pal — bundle layer.
+#
+# One row and no configuration. Everything visible is owned by the browser
+# half, which registers a single entry in the composer dock. The row id stays
+# stable across releases; the name is the package other people install.
+- insert:
+    - id: peak-price-pal
+      name: dsh-peak-price-pal
