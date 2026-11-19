@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Peak Price Pal",
-    "description": "Adds a small sun or moon beside the composer's context ring to show whether DeepSeek is billing at peak or off-peak rates. Hover or focus for Beijing time, the next switch, the rule, today's status, and the model route, with the peak and off-peak words color-coded. Hidden on third-party providers such as OpenRouter. The icon, clock, and detail choices are saved in this browser; no network requests. The 2026 and 2027 Chinese holiday calendars are bundled; later years fall back to the weekday rule.",
+    "description": "Adds a small sun or moon beside the composer's context ring to show whether DeepSeek is billing at peak or off-peak rates, with the current balance and today's spend in the hover card. The balance uses the DeepSeek key or account already set up in the Harness; the page reads it once a minute while the balance is shown. No second key is stored. Hover or focus for the rate details, Beijing time, the next switch, the rule, today's status, and the model route. Hidden on third-party providers such as OpenRouter. The icon, clock, detail, and balance choices are saved in this browser. The 2026 and 2027 Chinese holiday calendars are bundled; later years fall back to the weekday rule.",
     "detail": "docs/DETAIL.md"
   }
 }

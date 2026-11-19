@@ -1,9 +1,9 @@
 {
   "name": "dsh-peak-price-pal",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
-  "description": "A DeepSeek Harness plugin: a small sun or moon under the composer shows whether DeepSeek is billing at peak or off-peak rates.",
+  "description": "A DeepSeek Harness plugin: a small sun or moon under the composer shows whether DeepSeek is billing at peak or off-peak rates, with your balance and today's spend on hover.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -36,7 +36,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --check index.js && node --check client.js && node test/client.test.mjs"
+    "test": "node --check index.js && node --check client.js && node test/host.test.mjs && node test/client.test.mjs"
   },
   "keywords": [
     "deepseek",
@@ -46,7 +46,9 @@
     "peak",
     "off-peak",
     "china-holidays",
-    "composer"
+    "composer",
+    "balance",
+    "spend"
   ],
   "dsh": {
     "bundle": {

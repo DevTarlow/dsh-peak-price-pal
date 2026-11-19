@@ -47,12 +47,32 @@ window.__ModuleLoader__.load({
     const ICON_CHOICES = new Set(['sunMoon', 'dot'])
     const CLOCK_CHOICES = new Set(['24h', '12h'])
     const DETAIL_CHOICES = new Set(['all', 'minimal'])
-    const DEFAULT_SETTINGS = Object.freeze({ icon: 'sunMoon', clock: '24h', detail: 'all' })
+    const BALANCE_CHOICES = new Set(['show', 'hide'])
+    const DEFAULT_SETTINGS = Object.freeze({ icon: 'sunMoon', clock: '24h', detail: 'all', balance: 'show' })
+    /** The Host route; keep in step with `BALANCE_PATH` in index.js. */
+    const BALANCE_PATH = '/peak-price-pal/balance'
+    /** The card's mounted lifetime is the polling window. */
+    const BALANCE_POLL_MS = 60_000
+    /** A repeated read inside this window reuses the last answer. */
+    const BALANCE_CACHE_MS = 30_000
+    /** The browser gives up before the account service deadline. */
+    const BALANCE_TIMEOUT_MS = 20_000
+    /** A larger gap is treated as a new baseline, so old usage is not blamed on today. */
+    const BALANCE_MAX_GAP_MS = 15 * 60 * 1000
+    /** Local daily buckets and the last reading, in this browser only. */
+    const BALANCE_LEDGER_KEY = 'dsh-peak-price-pal.balance.v1'
+    const BALANCE_LEDGER_VERSION = 1
+    const BALANCE_DAY_LIMIT = 8
+    const BALANCE_MAX_READINGS = 12
+    /** Shared grammar with the Host; the client re-validates every field it displays. */
+    const BALANCE_DECIMAL = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i
+    const BALANCE_FAILURE_CODES = new Set(['unauthorized', 'network', 'timeout', 'protocol', 'failed', 'missing'])
+    const BALANCE_MAX_DECIMAL_LENGTH = 32
 
     /**
      * Validate one settings value against the supported choices.
      * @param {unknown} value - Parsed settings or a partial patch.
-     * @returns {{ icon: 'sunMoon' | 'dot', clock: '24h' | '12h', detail: 'all' | 'minimal' }} A complete, frozen settings object.
+     * @returns {{ icon: 'sunMoon' | 'dot', clock: '24h' | '12h', detail: 'all' | 'minimal', balance: 'show' | 'hide' }} A complete, frozen settings object.
      */
     function normalizeSettings(value) {
       const source = value !== null && typeof value === 'object' ? value : {}
@@ -60,12 +80,13 @@ window.__ModuleLoader__.load({
         icon: ICON_CHOICES.has(source.icon) ? source.icon : DEFAULT_SETTINGS.icon,
         clock: CLOCK_CHOICES.has(source.clock) ? source.clock : DEFAULT_SETTINGS.clock,
         detail: DETAIL_CHOICES.has(source.detail) ? source.detail : DEFAULT_SETTINGS.detail,
+        balance: BALANCE_CHOICES.has(source.balance) ? source.balance : DEFAULT_SETTINGS.balance,
       })
     }
 
     /**
      * Read the browser-local settings, falling back to defaults on bad JSON or blocked storage.
-     * @returns {{ icon: 'sunMoon' | 'dot', clock: '24h' | '12h', detail: 'all' | 'minimal' }} The stored or default settings.
+     * @returns {{ icon: 'sunMoon' | 'dot', clock: '24h' | '12h', detail: 'all' | 'minimal', balance: 'show' | 'hide' }} The stored or default settings.
      */
     function readSettings() {
       try {
@@ -79,7 +100,7 @@ window.__ModuleLoader__.load({
 
     /**
      * Persist the settings. A blocked or full storage keeps the in-memory value only.
-     * @param {{ icon: string, clock: string, detail: string }} settings - Settings to write.
+     * @param {{ icon: string, clock: string, detail: string, balance: string }} settings - Settings to write.
      */
     function writeSettings(settings) {
       try {
@@ -91,19 +112,20 @@ window.__ModuleLoader__.load({
 
     /**
      * Compare two complete settings objects.
-     * @param {{ icon: string, clock: string, detail: string }} left - First settings.
-     * @param {{ icon: string, clock: string, detail: string }} right - Second settings.
+     * @param {{ icon: string, clock: string, detail: string, balance: string }} left - First settings.
+     * @param {{ icon: string, clock: string, detail: string, balance: string }} right - Second settings.
      * @returns {boolean} True when every value matches.
      */
     function sameSettings(left, right) {
       return left.icon === right.icon && left.clock === right.clock && left.detail === right.detail
+        && left.balance === right.balance
     }
 
     /** Current settings snapshot and its subscribers. */
     let currentSettings = readSettings()
     const settingsListeners = new Set()
 
-    /** @returns {{ icon: 'sunMoon' | 'dot', clock: '24h' | '12h', detail: 'all' | 'minimal' }} The current settings. */
+    /** @returns {{ icon: 'sunMoon' | 'dot', clock: '24h' | '12h', detail: 'all' | 'minimal', balance: 'show' | 'hide' }} The current settings. */
     function settingsSnapshot() {
       return currentSettings
     }
@@ -120,7 +142,7 @@ window.__ModuleLoader__.load({
 
     /**
      * Replace the current settings when the values differ from the snapshot.
-     * @param {{ icon: string, clock: string, detail: string }} next - Complete settings.
+     * @param {{ icon: string, clock: string, detail: string, balance: string }} next - Complete settings.
      */
     function publishSettings(next) {
       if (sameSettings(currentSettings, next)) return
@@ -130,8 +152,8 @@ window.__ModuleLoader__.load({
 
     /**
      * Merge a patch into the current settings, persist, and notify.
-     * @param {{ icon?: string, clock?: string, detail?: string }} patch - Values to change.
-     * @returns {{ icon: 'sunMoon' | 'dot', clock: '24h' | '12h', detail: 'all' | 'minimal' }} The normalized settings.
+     * @param {{ icon?: string, clock?: string, detail?: string, balance?: string }} patch - Values to change.
+     * @returns {{ icon: 'sunMoon' | 'dot', clock: '24h' | '12h', detail: 'all' | 'minimal', balance: 'show' | 'hide' }} The normalized settings.
      */
     function updateSettings(patch) {
       const next = normalizeSettings({ ...currentSettings, ...patch })
@@ -489,6 +511,427 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * Which balance source a route uses.
+     * @param {string} provider - Session provider id.
+     * @returns {'apiKey' | 'account' | 'auto'} Source preference.
+     */
+    function balanceSource(provider) {
+      if (typeof provider !== 'string') return 'auto'
+      const id = provider.trim()
+      if (/^deepseek-account(?:[-_]|$)/i.test(id)) return 'account'
+      if (/^deepseek(?:-official)?$/i.test(id)) return 'apiKey'
+      return 'auto'
+    }
+
+    /**
+     * Whether a value is a finite decimal string the card may format.
+     * @param {unknown} value - Candidate.
+     * @returns {boolean} True for a bounded decimal string.
+     */
+    function isDecimalString(value) {
+      return typeof value === 'string'
+        && value.length > 0
+        && value.length <= BALANCE_MAX_DECIMAL_LENGTH
+        && BALANCE_DECIMAL.test(value)
+        && Number.isFinite(Number(value))
+    }
+
+    /**
+     * Validate the Host's ready wallets.
+     * @param {unknown} value - Candidate wallet array.
+     * @returns {object[] | null} Normalized wallets or null.
+     */
+    function normalizeWallets(value) {
+      if (!Array.isArray(value) || value.length < 1 || value.length > 4) return null
+      const wallets = []
+      const currencies = new Set()
+      for (const wallet of value) {
+        if (wallet === null || typeof wallet !== 'object') return null
+        if (wallet.currency !== 'CNY' && wallet.currency !== 'USD') return null
+        if (currencies.has(wallet.currency)) return null
+        currencies.add(wallet.currency)
+        if (!isDecimalString(wallet.total) || !isDecimalString(wallet.toppedUp) || !isDecimalString(wallet.granted)) {
+          return null
+        }
+        wallets.push({
+          currency: wallet.currency,
+          total: wallet.total,
+          toppedUp: wallet.toppedUp,
+          granted: wallet.granted,
+        })
+      }
+      return wallets
+    }
+
+    /**
+     * Validate the Host's balance response before it reaches the card.
+     * @param {unknown} value - Parsed route body.
+     * @returns {object} A ready, unconfigured, or failed view.
+     */
+    function normalizeBalanceResponse(value) {
+      if (value === null || typeof value !== 'object') return { status: 'failed', code: 'protocol' }
+      if (value.status === 'unconfigured') return { status: 'unconfigured' }
+      if (value.status === 'failed') {
+        const code = BALANCE_FAILURE_CODES.has(value.code) ? value.code : 'failed'
+        const source = value.source === 'apiKey' || value.source === 'account' ? value.source : undefined
+        const checkedAt = Number.isFinite(value.checkedAt) ? value.checkedAt : Date.now()
+        const failure = { status: 'failed', code, checkedAt }
+        if (source !== undefined) failure.source = source
+        return failure
+      }
+      if (value.status !== 'ready') return { status: 'failed', code: 'protocol' }
+      if (value.source !== 'apiKey' && value.source !== 'account') {
+        return { status: 'failed', code: 'protocol' }
+      }
+      const wallets = normalizeWallets(value.wallets)
+      if (wallets === null) return { status: 'failed', code: 'protocol' }
+      const result = {
+        status: 'ready',
+        source: value.source,
+        checkedAt: Number.isFinite(value.checkedAt) ? value.checkedAt : Date.now(),
+        wallets,
+      }
+      if (typeof value.available === 'boolean') result.available = value.available
+      return result
+    }
+
+    /**
+     * The symbol the card uses for one currency.
+     * @param {string} currency - `CNY` or `USD`.
+     * @returns {string} Currency symbol with a spacing fallback.
+     */
+    function currencySymbol(currency) {
+      if (currency === 'CNY') return '¥'
+      if (currency === 'USD') return '$'
+      return `${currency} `
+    }
+
+    /**
+     * Format a decimal string for the card and the settings status.
+     * @param {string | number} value - Decimal amount.
+     * @param {string} currency - `CNY` or `USD`.
+     * @returns {string} For example `¥110.00`, `<$0.01`, or `$1,234.50`.
+     */
+    function formatMoney(value, currency) {
+      const number = Number(value)
+      const symbol = currencySymbol(currency)
+      if (!Number.isFinite(number)) return `${symbol}—`
+      if (number === 0) return `${symbol}0.00`
+      if (number < 0) return `-${formatMoney(-number, currency)}`
+      if (number < 0.01) return `<${symbol}0.01`
+      const rounded = Math.floor(number * 100) / 100
+      return `${symbol}${rounded.toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`
+    }
+
+    /**
+     * A local calendar day key, matching Price Track Buddy's spend buckets.
+     * @param {number} ms - Epoch milliseconds.
+     * @returns {string} `YYYY-MM-DD` in the browser's zone.
+     */
+    function localDayKey(ms) {
+      const date = new Date(ms)
+      return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+    }
+
+    /** @returns {{ version: number, readings: object, days: object }} A fresh ledger. */
+    function emptyLedger() {
+      return { version: BALANCE_LEDGER_VERSION, readings: {}, days: {} }
+    }
+
+    /**
+     * Whether a value is a non-array object.
+     * @param {unknown} value - Candidate.
+     * @returns {boolean} True for a plain object.
+     */
+    function isPlainObject(value) {
+      return value !== null && typeof value === 'object' && !Array.isArray(value)
+    }
+
+    /**
+     * A finite number, or zero for a missing or corrupt amount.
+     * @param {unknown} value - Candidate.
+     * @returns {number} Finite amount.
+     */
+    function finiteAmount(value) {
+      const number = Number(value)
+      return Number.isFinite(number) ? number : 0
+    }
+
+    /**
+     * Read the local balance ledger, falling back to an empty ledger on bad JSON.
+     * @returns {{ version: number, readings: object, days: object }} The ledger.
+     */
+    function readLedger() {
+      try {
+        const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(BALANCE_LEDGER_KEY)
+        if (raw === null) return emptyLedger()
+        const parsed = JSON.parse(raw)
+        if (!isPlainObject(parsed) || parsed.version !== BALANCE_LEDGER_VERSION) return emptyLedger()
+        return {
+          version: BALANCE_LEDGER_VERSION,
+          readings: isPlainObject(parsed.readings) ? parsed.readings : {},
+          days: isPlainObject(parsed.days) ? parsed.days : {},
+        }
+      } catch {
+        return emptyLedger()
+      }
+    }
+
+    /**
+     * Persist the ledger. A blocked or full storage reports failure so the card omits spend.
+     * @param {{ version: number, readings: object, days: object }} ledger - Ledger to write.
+     * @returns {boolean} True when the write landed.
+     */
+    function writeLedger(ledger) {
+      try {
+        if (typeof localStorage === 'undefined') return false
+        localStorage.setItem(BALANCE_LEDGER_KEY, JSON.stringify(ledger))
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    /**
+     * Keep eight local days and a bounded set of readings.
+     * @param {{ version: number, readings: object, days: object }} ledger - Ledger to prune.
+     */
+    function pruneLedger(ledger) {
+      const days = Object.keys(ledger.days).sort()
+      while (days.length > BALANCE_DAY_LIMIT) delete ledger.days[days.shift()]
+      const readings = Object.entries(ledger.readings)
+        .filter(([, entry]) => isPlainObject(entry) && Number.isFinite(entry.at))
+        .sort((left, right) => right[1].at - left[1].at)
+        .slice(0, BALANCE_MAX_READINGS)
+      ledger.readings = Object.fromEntries(readings)
+    }
+
+    /**
+     * Today's spent and topped-up totals for the wallets of one ready balance.
+     * @param {{ readings: object, days: object }} ledger - Ledger.
+     * @param {object} balance - Ready balance.
+     * @param {number} now - Epoch milliseconds.
+     * @returns {{ spentToday: Record<string, number>, toppedUpToday: Record<string, number> } | null} Totals or null.
+     */
+    function spendFromLedger(ledger, balance, now = Date.now()) {
+      if (balance === null || balance === undefined || balance.status !== 'ready') return null
+      const dayKey = localDayKey(now)
+      const day = isPlainObject(ledger.days[dayKey]) ? ledger.days[dayKey] : {}
+      const spentToday = {}
+      const toppedUpToday = {}
+      for (const wallet of balance.wallets) {
+        const key = `${balance.source}:${wallet.currency}`
+        const reading = isPlainObject(ledger.readings[key]) ? ledger.readings[key] : null
+        // No reading today means tracking has not covered this wallet yet; omit rather than claim zero.
+        if (reading === null || !Number.isFinite(reading.at) || localDayKey(reading.at) !== dayKey) continue
+        const bucket = isPlainObject(day[key]) ? day[key] : null
+        spentToday[wallet.currency] = bucket === null ? 0 : finiteAmount(bucket.spent)
+        toppedUpToday[wallet.currency] = bucket === null ? 0 : finiteAmount(bucket.toppedUp)
+      }
+      return { spentToday, toppedUpToday }
+    }
+
+    /**
+     * Tell whether the ledger can be read; a blocked store has no spend to show.
+     * @returns {boolean} True when local storage is readable.
+     */
+    function canReadLedger() {
+      try {
+        if (typeof localStorage === 'undefined' || typeof localStorage.getItem !== 'function') return false
+        localStorage.getItem(BALANCE_LEDGER_KEY)
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    /**
+     * Read today's totals without recording a new reading.
+     * @param {object} balance - Ready balance.
+     * @param {number} [now] - Epoch milliseconds.
+     * @returns {{ spentToday: Record<string, number>, toppedUpToday: Record<string, number> } | null} Totals or null.
+     */
+    function readTodaySpend(balance, now = Date.now()) {
+      if (!canReadLedger()) return null
+      return spendFromLedger(readLedger(), balance, now)
+    }
+
+    /**
+     * Record one reading and accumulate same-day, close-enough balance drops.
+     * A larger gap or a new local day only re-seeds the baseline, so usage the
+     * page never saw is not blamed on today.
+     * @param {object} balance - Ready balance.
+     * @param {number} [now] - Reading time.
+     * @returns {{ spentToday: Record<string, number>, toppedUpToday: Record<string, number> } | null} Today's totals, or null when storage is blocked.
+     */
+    function recordBalanceReading(balance, now = Date.now()) {
+      if (balance === null || balance === undefined || balance.status !== 'ready') return null
+      if (!Number.isFinite(now)) now = Date.now()
+      try {
+        const ledger = readLedger()
+        const dayKey = localDayKey(now)
+        const day = isPlainObject(ledger.days[dayKey]) ? ledger.days[dayKey] : {}
+        for (const wallet of balance.wallets) {
+          const current = Number(wallet.total)
+          if (!Number.isFinite(current)) continue
+          const key = `${balance.source}:${wallet.currency}`
+          const previous = isPlainObject(ledger.readings[key]) ? ledger.readings[key] : null
+          if (previous !== null && Number.isFinite(Number(previous.total)) && Number.isFinite(previous.at)) {
+            const elapsed = now - previous.at
+            if (elapsed >= 0 && elapsed <= BALANCE_MAX_GAP_MS && localDayKey(previous.at) === dayKey) {
+              const bucket = isPlainObject(day[key]) ? day[key] : { spent: 0, toppedUp: 0 }
+              const delta = current - Number(previous.total)
+              if (delta < -0.005) {
+                bucket.spent = finiteAmount(bucket.spent) + Math.abs(delta)
+                day[key] = bucket
+              } else if (delta > 0.005) {
+                bucket.toppedUp = finiteAmount(bucket.toppedUp) + delta
+                day[key] = bucket
+              }
+            }
+          }
+          ledger.readings[key] = { total: wallet.total, at: now }
+        }
+        ledger.days[dayKey] = day
+        pruneLedger(ledger)
+        if (!writeLedger(ledger)) return null
+        return spendFromLedger(ledger, balance, now)
+      } catch {
+        return null
+      }
+    }
+
+    /**
+     * The localized balance and spend lines for the hover card.
+     * @param {object | null} balance - Latest monitor state.
+     * @param {(key: string, vars?: Record<string, unknown>) => string} t - Translate seat.
+     * @returns {string[]} Zero or more lines.
+     */
+    function balanceLines(balance, t) {
+      if (balance === null || balance === undefined || balance.status === 'idle') return []
+      if (balance.status === 'loading') return [t('tip.balanceLoading')]
+      if (balance.status === 'unconfigured') {
+        const source = balance.requestedSource
+        if (source === 'account') return [t('tip.balanceUnconfiguredAccount')]
+        if (source === 'apiKey') return [t('tip.balanceUnconfiguredKey')]
+        return [t('tip.balanceUnconfiguredGeneric')]
+      }
+      if (balance.status === 'failed') {
+        if (balance.code === 'missing') return [t('tip.balanceMissingRoute')]
+        if (balance.code === 'unauthorized') {
+          const source = balance.source ?? balance.requestedSource
+          if (source === 'account') return [t('tip.balanceRejectedAccount')]
+          if (source === 'apiKey') return [t('tip.balanceRejectedKey')]
+          return [t('tip.balanceRejectedGeneric')]
+        }
+        return [t('tip.balanceUnavailable')]
+      }
+      if (balance.status !== 'ready' || !Array.isArray(balance.wallets) || balance.wallets.length === 0) {
+        return [t('tip.balanceUnavailable')]
+      }
+      const lines = []
+      for (const wallet of balance.wallets) {
+        lines.push(t('tip.balance', { amount: formatMoney(wallet.total, wallet.currency) }))
+        lines.push(t('tip.balanceSplit', {
+          toppedUp: formatMoney(wallet.toppedUp, wallet.currency),
+          granted: formatMoney(wallet.granted, wallet.currency),
+        }))
+        const spent = balance.spend?.spentToday?.[wallet.currency]
+        if (spent !== undefined) lines.push(t('tip.spentToday', { amount: formatMoney(spent, wallet.currency) }))
+        const toppedUp = balance.spend?.toppedUpToday?.[wallet.currency]
+        if (toppedUp !== undefined && toppedUp > 0.005) {
+          lines.push(t('tip.toppedUpToday', { amount: formatMoney(toppedUp, wallet.currency) }))
+        }
+      }
+      if (balance.available === false) lines.push(t('tip.balanceLow'))
+      return lines
+    }
+
+    /**
+     * The read-only status shown on the settings page.
+     * @param {object} status - Settings status state.
+     * @param {(key: string, vars?: Record<string, unknown>) => string} t - Translate seat.
+     * @returns {string} Status text.
+     */
+    function balanceStatusText(status, t) {
+      if (status === null || status === undefined || status.status === 'hidden') return t('settings.balance.hidden')
+      if (status.status === 'loading' || status.status === 'idle') return t('settings.balance.checking')
+      if (status.status === 'unconfigured') return t('settings.balance.unconfigured')
+      if (status.status === 'failed') {
+        if (status.code === 'missing') return t('settings.balance.missing')
+        return status.code === 'unauthorized' ? t('settings.balance.rejected') : t('settings.balance.unavailable')
+      }
+      if (status.status !== 'ready' || !Array.isArray(status.wallets) || status.wallets.length === 0) {
+        return t('settings.balance.unavailable')
+      }
+      const amounts = status.wallets.map(wallet => formatMoney(wallet.total, wallet.currency)).join(' · ')
+      const spent = status.wallets
+        .map(wallet => {
+          const amount = status.spend?.spentToday?.[wallet.currency]
+          return amount === undefined ? null : formatMoney(amount, wallet.currency)
+        })
+        .filter(value => value !== null)
+        .join(' · ')
+      const source = t(status.source === 'account'
+        ? 'settings.balance.source.account'
+        : 'settings.balance.source.apiKey')
+      return spent === ''
+        ? t('settings.balance.status', { amounts, source })
+        : t('settings.balance.today', { amounts, spent, source })
+    }
+
+    /** The client cache for on-demand balance reads. */
+    const balanceCache = new Map()
+
+    /**
+     * Whether a fetch error is the request deadline or a caller abort.
+     * @param {unknown} error - Thrown value.
+     * @returns {boolean} True for an abort.
+     */
+    function isAbortError(error) {
+      const name = error !== null && typeof error === 'object' ? error.name : ''
+      return name === 'AbortError' || name === 'TimeoutError'
+    }
+
+    /**
+     * Read one balance source through the Host route.
+     * @param {'apiKey' | 'account' | 'auto'} source - Source preference.
+     * @param {AbortSignal} [signal] - Caller lifetime.
+     * @returns {Promise<object>} A ready, unconfigured, or failed view.
+     */
+    async function fetchBalance(source, signal) {
+      const key = source === 'account' ? 'account' : source === 'apiKey' ? 'apiKey' : 'auto'
+      const hit = balanceCache.get(key)
+      if (hit !== undefined && Date.now() - hit.at < BALANCE_CACHE_MS) return hit.value
+      if (typeof fetch !== 'function') return { status: 'failed', code: 'network' }
+      let response
+      try {
+        response = await fetch(`${BALANCE_PATH}?source=${encodeURIComponent(key)}`, {
+          method: 'GET',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: { accept: 'application/json' },
+          signal,
+        })
+      } catch (error) {
+        return { status: 'failed', code: isAbortError(error) ? 'timeout' : 'network' }
+      }
+      if (!response.ok) return { status: 'failed', code: response.status === 404 ? 'missing' : 'failed' }
+      let payload
+      try {
+        payload = await response.json()
+      } catch (error) {
+        return { status: 'failed', code: isAbortError(error) ? 'timeout' : 'protocol' }
+      }
+      const value = normalizeBalanceResponse(payload)
+      if (value.status !== 'failed') balanceCache.set(key, { at: Date.now(), value })
+      return value
+    }
+
     /** English UI and hover strings. */
     const EN = {
       'tip.peak': 'Peak rate · standard price',
@@ -506,6 +949,20 @@ window.__ModuleLoader__.load({
       'tip.today': 'Today in Beijing: {status}',
       'tip.calendarMissing': 'The Chinese holiday calendar for {years} is not bundled; using the weekday rule.',
       'tip.model': 'DeepSeek route: {route}',
+      'tip.balance': 'Balance: {amount}',
+      'tip.balanceSplit': 'Topped up {toppedUp} · Granted {granted}',
+      'tip.spentToday': 'Tracked today: {amount}',
+      'tip.toppedUpToday': 'Topped up today: {amount}',
+      'tip.balanceLow': 'Balance is too low for new API calls.',
+      'tip.balanceLoading': 'Balance: checking…',
+      'tip.balanceUnconfiguredKey': 'Balance: no DeepSeek API key found in this Harness.',
+      'tip.balanceUnconfiguredAccount': 'Balance: sign in to DeepSeek to see it.',
+      'tip.balanceUnconfiguredGeneric': 'Balance: no DeepSeek key or sign-in found.',
+      'tip.balanceRejectedKey': 'Balance: the DeepSeek key was rejected.',
+      'tip.balanceRejectedAccount': 'Balance: sign in again to see it.',
+      'tip.balanceRejectedGeneric': 'Balance: the DeepSeek credential was rejected.',
+      'tip.balanceUnavailable': 'Balance: unavailable.',
+      'tip.balanceMissingRoute': 'Balance: restart the Harness to load the balance route.',
       'duration.daysHours': '{days}d {hours}h',
       'duration.days': '{days}d',
       'duration.hoursMinutes': '{hours}h {minutes}m',
@@ -535,8 +992,8 @@ window.__ModuleLoader__.load({
       'weekday.5': 'Fri',
       'weekday.6': 'Sat',
       'settings.tab': 'Peak Price Pal',
-      'settings.title': 'Logo settings',
-      'settings.description': 'Choose the icon, the clock, and how much the hover card shows.',
+      'settings.title': 'Display settings',
+      'settings.description': 'Choose the icon, the clock, how much the hover card shows, and whether it reads your balance.',
       'settings.icon': 'Icon',
       'settings.icon.sunMoon': 'Sun and moon',
       'settings.icon.dot': 'Dot',
@@ -548,9 +1005,25 @@ window.__ModuleLoader__.load({
       'settings.details': 'Details',
       'settings.details.all': 'All details',
       'settings.details.minimal': 'Minimal',
-      'settings.details.help': 'Minimal keeps the state and the next switch.',
+      'settings.details.help': 'Minimal keeps the state and the next switch. Balance tracking still runs.',
+      'settings.balance': 'Balance',
+      'settings.balance.help': 'Shows your balance and tracked spend. The logo reads once a minute while the Harness page is open; this page reads once on open. Hide stops the reads.',
+      'settings.balance.show': 'Show',
+      'settings.balance.hide': 'Hide',
+      'settings.balanceSource': 'Balance source',
+      'settings.balanceSource.help': 'The number this page checked. The card follows the current route.',
+      'settings.balance.checking': 'Checking…',
+      'settings.balance.hidden': 'Hidden',
+      'settings.balance.unconfigured': 'No key or sign-in',
+      'settings.balance.rejected': 'Credential rejected',
+      'settings.balance.unavailable': 'Unavailable',
+      'settings.balance.missing': 'Restart the Harness',
+      'settings.balance.status': '{amounts} · {source}',
+      'settings.balance.today': '{amounts} · tracked today {spent} · {source}',
+      'settings.balance.source.apiKey': 'API key',
+      'settings.balance.source.account': 'Account',
       'settings.reset': 'Reset to defaults',
-      'settings.saved': 'Saved in this browser.',
+      'settings.saved': 'Saved in this browser. Balance reads happen while the Harness page is open, and once when this page opens.',
     }
 
     /** Chinese UI and hover strings. */
@@ -570,6 +1043,20 @@ window.__ModuleLoader__.load({
       'tip.today': '北京今天：{status}',
       'tip.calendarMissing': '{years} 年中国法定节假日表尚未内置，暂按周一至周五规则判断。',
       'tip.model': 'DeepSeek 路由：{route}',
+      'tip.balance': '余额：{amount}',
+      'tip.balanceSplit': '充值 {toppedUp} · 赠送 {granted}',
+      'tip.spentToday': '今日已跟踪：{amount}',
+      'tip.toppedUpToday': '今日充值：{amount}',
+      'tip.balanceLow': '余额不足以发起新的 API 调用。',
+      'tip.balanceLoading': '余额：正在查询…',
+      'tip.balanceUnconfiguredKey': '余额：此 Harness 中未找到 DeepSeek API 密钥。',
+      'tip.balanceUnconfiguredAccount': '余额：登录 DeepSeek 后即可查看。',
+      'tip.balanceUnconfiguredGeneric': '余额：未找到 DeepSeek 密钥或登录状态。',
+      'tip.balanceRejectedKey': '余额：DeepSeek 密钥被拒绝。',
+      'tip.balanceRejectedAccount': '余额：请重新登录后查看。',
+      'tip.balanceRejectedGeneric': '余额：DeepSeek 凭据被拒绝。',
+      'tip.balanceUnavailable': '余额：暂时不可用。',
+      'tip.balanceMissingRoute': '余额：请重启 Harness 以加载余额路由。',
       'duration.daysHours': '{days} 天 {hours} 小时',
       'duration.days': '{days} 天',
       'duration.hoursMinutes': '{hours} 小时 {minutes} 分',
@@ -599,8 +1086,8 @@ window.__ModuleLoader__.load({
       'weekday.5': '周五',
       'weekday.6': '周六',
       'settings.tab': '峰谷小助手',
-      'settings.title': '徽标设置',
-      'settings.description': '选择图标、时钟格式，以及悬停卡显示多少内容。',
+      'settings.title': '显示设置',
+      'settings.description': '选择图标、时钟格式、悬停卡显示多少内容，以及是否读取余额。',
       'settings.icon': '图标',
       'settings.icon.sunMoon': '太阳和月亮',
       'settings.icon.dot': '圆点',
@@ -612,9 +1099,25 @@ window.__ModuleLoader__.load({
       'settings.details': '详情',
       'settings.details.all': '全部详情',
       'settings.details.minimal': '精简',
-      'settings.details.help': '精简模式只保留当前时段和下次切换。',
+      'settings.details.help': '精简模式只保留当前时段和下次切换；余额仍会跟踪。',
+      'settings.balance': '余额',
+      'settings.balance.help': '显示余额和今日已跟踪的消费。Harness 页面打开时徽标每分钟读取一次；打开本页时读取一次。选择“隐藏”可停止读取。',
+      'settings.balance.show': '显示',
+      'settings.balance.hide': '隐藏',
+      'settings.balanceSource': '余额来源',
+      'settings.balanceSource.help': '本页检查到的数字。悬停卡会跟随当前路由。',
+      'settings.balance.checking': '正在查询…',
+      'settings.balance.hidden': '已隐藏',
+      'settings.balance.unconfigured': '未找到密钥或登录',
+      'settings.balance.rejected': '凭据被拒绝',
+      'settings.balance.unavailable': '不可用',
+      'settings.balance.missing': '需要重启 Harness',
+      'settings.balance.status': '{amounts} · {source}',
+      'settings.balance.today': '{amounts} · 今日已跟踪 {spent} · {source}',
+      'settings.balance.source.apiKey': 'API 密钥',
+      'settings.balance.source.account': '账户',
       'settings.reset': '恢复默认',
-      'settings.saved': '设置保存在此浏览器。',
+      'settings.saved': '设置保存在此浏览器。Harness 页面打开时读取余额，打开本页时读取一次。',
     }
 
     /**
@@ -703,6 +1206,7 @@ window.__ModuleLoader__.load({
 .ppp_reset{margin-top:16px;align-self:flex-start;padding:4px 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:pointer}
 .ppp_reset:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .ppp_reset:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
+.ppp_balanceValue{max-width:280px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;font-variant-numeric:tabular-nums;text-align:right;overflow-wrap:anywhere}
 .ppp_saved{margin:10px 0 0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 `.trim()
 
@@ -815,14 +1319,175 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Create the poll loop for one balance source. Extracted from the React hook
+     * so the lifecycle can be tested without a renderer.
+     * @param {object} options - Source, callbacks, timers, and listeners.
+     * @returns {{ run: (force?: boolean) => Promise<void>, stop: () => void }} Controller.
+     */
+    function createBalanceMonitor(options) {
+      const {
+        source,
+        fetchValue = fetchBalance,
+        recordValue = recordBalanceReading,
+        onState,
+        now = () => Date.now(),
+        intervalMs = BALANCE_POLL_MS,
+        timeoutMs = BALANCE_TIMEOUT_MS,
+        setIntervalImpl = (callback, delay) => setInterval(callback, delay),
+        clearIntervalImpl = handle => clearInterval(handle),
+        listeners,
+        isVisible = () => true,
+      } = options
+      let live = true
+      let fetching = false
+      let lastFetchAt = 0
+      let lastReady = null
+      let controller = null
+      const run = async (force = true) => {
+        if (!live || fetching) return
+        if (!force && now() - lastFetchAt < BALANCE_CACHE_MS) return
+        fetching = true
+        controller = new AbortController()
+        const timeout = setTimeout(() => {
+          if (controller !== null) controller.abort()
+        }, timeoutMs)
+        try {
+          const value = await fetchValue(source, controller.signal)
+          if (!live) return
+          lastFetchAt = now()
+          if (value.status === 'ready') {
+            const readingAt = Number.isFinite(value.checkedAt) ? value.checkedAt : now()
+            const spend = recordValue(value, readingAt)
+            lastReady = { ...value, spend, requestedSource: source }
+            onState(lastReady)
+          } else if (!(value.status === 'failed' && lastReady !== null)) {
+            onState({ ...value, requestedSource: source })
+          }
+        } catch {
+          // A transient poll failure never replaces a number the card already has.
+          if (live && lastReady === null) {
+            onState({ status: 'failed', code: 'failed', requestedSource: source })
+          }
+        } finally {
+          clearTimeout(timeout)
+          fetching = false
+          controller = null
+        }
+      }
+      const timer = setIntervalImpl(() => { void run(true) }, intervalMs)
+      const onVisible = () => {
+        if (isVisible()) void run(false)
+      }
+      const onOnline = () => { void run(true) }
+      if (listeners !== undefined) {
+        listeners.add('visibilitychange', onVisible)
+        listeners.add('online', onOnline)
+      }
+      return {
+        run,
+        stop() {
+          live = false
+          clearIntervalImpl(timer)
+          if (controller !== null) controller.abort()
+          if (listeners !== undefined) {
+            listeners.remove('visibilitychange', onVisible)
+            listeners.remove('online', onOnline)
+          }
+        },
+      }
+    }
+
+    /**
+     * Poll one balance source while the card is mounted.
+     * The first read happens on mount, not on hover, so the tracked total is covered.
+     * The timer keeps running in a background tab while the page stays open; the
+     * visibility listener only refreshes on return.
+     * @param {'apiKey' | 'account' | 'auto'} source - Source preference.
+     * @param {boolean} enabled - False when balance is hidden.
+     * @returns {object} Latest monitor state.
+     */
+    function useBalanceMonitor(source, enabled) {
+      const [state, setState] = useState(() => ({ status: 'idle' }))
+      useEffect(() => {
+        if (!enabled) {
+          setState({ status: 'idle' })
+          return () => {}
+        }
+        setState(current => (
+          current !== null && current.status === 'ready' && current.requestedSource === source
+            ? current
+            : { status: 'loading', requestedSource: source }
+        ))
+        const listeners = typeof document !== 'undefined' && typeof window !== 'undefined'
+          ? {
+              add(type, handler) {
+                const target = type === 'visibilitychange' ? document : window
+                if (typeof target.addEventListener === 'function') target.addEventListener(type, handler)
+              },
+              remove(type, handler) {
+                const target = type === 'visibilitychange' ? document : window
+                if (typeof target.removeEventListener === 'function') target.removeEventListener(type, handler)
+              },
+            }
+          : undefined
+        const monitor = createBalanceMonitor({
+          source,
+          onState: setState,
+          listeners,
+          isVisible: () => typeof document === 'undefined' || document.visibilityState === 'visible',
+        })
+        void monitor.run(true)
+        return () => monitor.stop()
+      }, [source, enabled])
+      return state
+    }
+
+    /**
+     * Read the balance once for the settings page without recording a spend reading.
+     * @param {boolean} enabled - False when balance is hidden.
+     * @returns {object} Latest status state.
+     */
+    function useBalanceStatus(enabled) {
+      const [status, setStatus] = useState(() => ({ status: enabled ? 'loading' : 'hidden' }))
+      useEffect(() => {
+        if (!enabled) {
+          setStatus({ status: 'hidden' })
+          return () => {}
+        }
+        let live = true
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), BALANCE_TIMEOUT_MS)
+        setStatus({ status: 'loading' })
+        void fetchBalance('auto', controller.signal).then(value => {
+          if (!live) return
+          if (value.status === 'ready') {
+            const readingAt = Number.isFinite(value.checkedAt) ? value.checkedAt : Date.now()
+            setStatus({ ...value, spend: readTodaySpend(value, readingAt) })
+          } else {
+            setStatus(value)
+          }
+        }).catch(() => {
+          if (live) setStatus({ status: 'failed', code: 'failed' })
+        })
+        return () => {
+          live = false
+          clearTimeout(timer)
+          controller.abort()
+        }
+      }, [enabled])
+      return status
+    }
+
+    /**
      * Build the logo state and the hover card content.
      * @param {number} ms - Epoch milliseconds.
      * @param {(key: string, vars?: Record<string, unknown>) => string} t - Translate seat.
      * @param {{ provider: string, model: string }} route - DeepSeek route.
-     * @param {{ icon: string, clock: '24h' | '12h', detail: 'all' | 'minimal' }} [settings] - Display preferences.
+     * @param {{ icon: string, clock: '24h' | '12h', detail: 'all' | 'minimal', balance?: 'show' | 'hide' }} [settings] - Display preferences.
+     * @param {object | null} [balance] - Latest balance monitor state.
      * @returns {{ peak: boolean, tooltip: string, lines: { text: string, tone: 'peak' | 'offPeak' | null }[][] }} View model.
      */
-    function describe(ms, t, route, settings = DEFAULT_SETTINGS) {
+    function describe(ms, t, route, settings = DEFAULT_SETTINGS, balance = null) {
       const peak = isPeak(ms)
       const next = nextSwitch(ms)
       const clock = settings.clock
@@ -842,6 +1507,7 @@ window.__ModuleLoader__.load({
       if (settings.detail === 'minimal') {
         if (nextLine !== null) lines.push(nextLine)
       } else {
+        if (settings.balance !== 'hide') lines.push(...balanceLines(balance, t))
         lines.push(t('tip.beijing', { stamp: nowBeijing }))
         if (nowLocal !== nowBeijing) {
           lines.push(t('tip.local', {
@@ -880,7 +1546,12 @@ window.__ModuleLoader__.load({
     function PeakPricePalLive({ route, t }) {
       const settings = useSettings()
       const now = useNow()
-      const view = useMemo(() => describe(now, t, route, settings), [now, t, route, settings])
+      const source = balanceSource(route.provider)
+      const balance = useBalanceMonitor(source, settings.balance !== 'hide')
+      const view = useMemo(
+        () => describe(now, t, route, settings, balance),
+        [now, t, route, settings, balance],
+      )
       const [hovered, setHovered] = useState(false)
       const [focused, setFocused] = useState(false)
       const closeTimer = useRef(null)
@@ -997,6 +1668,7 @@ window.__ModuleLoader__.load({
      */
     function SettingsPage({ t }) {
       const settings = useSettings()
+      const balanceStatus = useBalanceStatus(settings.balance !== 'hide')
       const sunMoonPreview = h('span', { className: 'ppp_choiceGlyphs', 'aria-hidden': 'true' },
         h('span', { className: 'ppp_previewPeak' }, h(SunGlyph)),
         h('span', { className: 'ppp_previewValley' }, h(MoonGlyph)))
@@ -1039,6 +1711,19 @@ window.__ModuleLoader__.load({
             { value: 'minimal', label: t('settings.details.minimal') },
           ],
         })),
+        row(t('settings.balance'), t('settings.balance.help'), h(ChoiceGroup, {
+          label: t('settings.balance'),
+          value: settings.balance,
+          onChange: balance => updateSettings({ balance }),
+          options: [
+            { value: 'show', label: t('settings.balance.show') },
+            { value: 'hide', label: t('settings.balance.hide') },
+          ],
+        })),
+        row(t('settings.balanceSource'), t('settings.balanceSource.help'), h('span', {
+          className: 'ppp_balanceValue',
+          'aria-live': 'polite',
+        }, balanceStatusText(balanceStatus, t))),
         h('button', { type: 'button', className: 'ppp_reset', onClick: () => resetSettings() }, t('settings.reset')),
         h('p', { className: 'ppp_saved' }, t('settings.saved')))
     }
@@ -1109,6 +1794,31 @@ window.__ModuleLoader__.load({
         highlightWords,
         formatClock,
         translateFallback,
+        BALANCE_PATH,
+        BALANCE_POLL_MS,
+        BALANCE_CACHE_MS,
+        BALANCE_MAX_GAP_MS,
+        BALANCE_LEDGER_KEY,
+        BALANCE_DAY_LIMIT,
+        balanceSource,
+        normalizeBalanceResponse,
+        formatMoney,
+        localDayKey,
+        readLedger,
+        readTodaySpend,
+        recordBalanceReading,
+        balanceLines,
+        balanceStatusText,
+        fetchBalance,
+        createBalanceMonitor,
+        resetBalanceCache: () => { balanceCache.clear() },
+        resetBalanceLedger: () => {
+          try {
+            if (typeof localStorage !== 'undefined') localStorage.removeItem(BALANCE_LEDGER_KEY)
+          } catch {
+            // Nothing to clear when storage is blocked.
+          }
+        },
         settings: {
           key: SETTINGS_KEY,
           defaults: DEFAULT_SETTINGS,

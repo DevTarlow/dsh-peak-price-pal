@@ -69,6 +69,8 @@ assert.ok(api, 'the module exposes its test face')
 
 beforeEach(() => {
   api.settings.reset()
+  api.resetBalanceLedger()
+  api.resetBalanceCache()
 })
 
 const t = (key, vars) => api.translateFallback(key, vars)
@@ -167,11 +169,11 @@ test('the countdown uses the active locale in Chinese', () => {
 test('settings default to the current behavior and reject unknown values', () => {
   assert.deepEqual(api.settings.normalize(undefined), api.settings.defaults)
   assert.deepEqual(api.settings.normalize({ icon: 'dot', clock: '12h', detail: 'minimal' }), {
-    icon: 'dot', clock: '12h', detail: 'minimal',
+    icon: 'dot', clock: '12h', detail: 'minimal', balance: 'show',
   })
-  assert.deepEqual(api.settings.normalize({ icon: 'nope', clock: 'nope', detail: 'nope' }), api.settings.defaults)
-  assert.deepEqual(api.settings.normalize({ icon: 'dot', extra: true }), {
-    ...api.settings.defaults, icon: 'dot',
+  assert.deepEqual(api.settings.normalize({ icon: 'nope', clock: 'nope', detail: 'nope', balance: 'nope' }), api.settings.defaults)
+  assert.deepEqual(api.settings.normalize({ icon: 'dot', balance: 'hide', extra: true }), {
+    ...api.settings.defaults, icon: 'dot', balance: 'hide',
   })
 })
 
@@ -192,7 +194,7 @@ test('settings persist and notify subscribers', () => {
 
 test('settings read tolerates bad JSON and blocked storage', () => {
   settingsStorage.set(api.settings.key, JSON.stringify({ icon: 'dot', clock: '12h', detail: 'minimal' }))
-  assert.deepEqual(api.settings.read(), { icon: 'dot', clock: '12h', detail: 'minimal' })
+  assert.deepEqual(api.settings.read(), { icon: 'dot', clock: '12h', detail: 'minimal', balance: 'show' })
   settingsStorage.set(api.settings.key, '{bad json')
   assert.deepEqual(api.settings.read(), api.settings.defaults)
   const original = globalThis.localStorage
@@ -262,13 +264,379 @@ test('the settings choice group updates through its callback', () => {
   assert.deepEqual(changes, ['dot'])
 })
 
-test('the settings page renders the three preference rows', () => {
+test('the settings page renders the preference rows and the balance status', () => {
   const page = api.settingsPage({ t })
   assert.equal(page.props.className, 'ppp_settings')
-  assert.ok(page.children.some(child => child.type === 'h2' && child.children[0] === 'Logo settings'))
+  assert.ok(page.children.some(child => child.type === 'h2' && child.children[0] === 'Display settings'))
   const rows = page.children.filter(child => child.type === 'div' && child.props.className === 'ppp_settingRow')
-  assert.equal(rows.length, 3)
+  assert.equal(rows.length, 5)
+  assert.deepEqual(rows.map(row => row.children[0].children[0].children[0]), [
+    'Icon', 'Clock', 'Details', 'Balance', 'Balance source',
+  ])
+  const balanceRow = rows[3]
+  assert.equal(balanceRow.children[1].type, api.choiceGroup)
+  assert.equal(balanceRow.children[1].props.value, 'show')
+  assert.deepEqual(balanceRow.children[1].props.options.map(option => option.value), ['show', 'hide'])
+  const statusRow = rows[4]
+  assert.equal(statusRow.children[1].props.className, 'ppp_balanceValue')
+  assert.equal(statusRow.children[1].props['aria-live'], 'polite')
+  assert.equal(statusRow.children[1].children[0], 'Checking…')
   assert.ok(page.children.some(child => child.type === 'button' && child.props.className === 'ppp_reset'))
+})
+
+test('the balance source follows the DeepSeek route', () => {
+  assert.equal(api.balanceSource('deepseek-account'), 'account')
+  assert.equal(api.balanceSource('deepseek-official'), 'apiKey')
+  assert.equal(api.balanceSource('deepseek'), 'apiKey')
+  assert.equal(api.balanceSource('deepseek-custom'), 'auto')
+  assert.equal(api.balanceSource('openrouter'), 'auto')
+  assert.equal(api.balanceSource(null), 'auto')
+})
+
+test('the balance response is validated before display', () => {
+  const wallets = [{ currency: 'CNY', total: '110.00', toppedUp: '100.00', granted: '10.00' }]
+  assert.deepEqual(api.normalizeBalanceResponse({
+    status: 'ready', source: 'apiKey', available: true, checkedAt: 7, wallets,
+  }), { status: 'ready', source: 'apiKey', available: true, checkedAt: 7, wallets })
+  assert.deepEqual(api.normalizeBalanceResponse({ status: 'unconfigured' }), { status: 'unconfigured' })
+  assert.deepEqual(api.normalizeBalanceResponse({
+    status: 'failed', code: 'unauthorized', source: 'account', checkedAt: 9,
+  }), { status: 'failed', code: 'unauthorized', source: 'account', checkedAt: 9 })
+  assert.equal(api.normalizeBalanceResponse({ status: 'failed', code: 'mystery', checkedAt: 9 }).code, 'failed')
+  assert.equal(api.normalizeBalanceResponse({ status: 'ready', source: 'apiKey', wallets: [] }).code, 'protocol')
+  assert.equal(api.normalizeBalanceResponse({
+    status: 'ready', source: 'apiKey', wallets: [{ ...wallets[0], currency: 'EUR' }],
+  }).code, 'protocol')
+  assert.equal(api.normalizeBalanceResponse({
+    status: 'ready', source: 'apiKey', wallets: [{ currency: 'CNY', total: '1,000', toppedUp: '1', granted: '0' }],
+  }).code, 'protocol')
+  assert.equal(api.normalizeBalanceResponse({
+    status: 'ready', source: 'apiKey', wallets: [
+      { currency: 'CNY', total: '1.00', toppedUp: '1.00', granted: '0.00' },
+      { currency: 'CNY', total: '2.00', toppedUp: '2.00', granted: '0.00' },
+    ],
+  }).code, 'protocol')
+  assert.equal(api.normalizeBalanceResponse(null).code, 'protocol')
+})
+
+test('money formatting keeps symbols, grouping, and sub-cent values', () => {
+  assert.equal(api.formatMoney('110', 'CNY'), '¥110.00')
+  assert.equal(api.formatMoney('1234.5', 'USD'), '$1,234.50')
+  assert.equal(api.formatMoney('0.004', 'USD'), '<$0.01')
+  assert.equal(api.formatMoney('0', 'USD'), '$0.00')
+  assert.equal(api.formatMoney('-1.5', 'CNY'), '-¥1.50')
+  assert.equal(api.formatMoney('not a number', 'CNY'), '¥—')
+})
+
+test('the balance monitor polls, records, and stops', async () => {
+  const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+  const states = []
+  const recorded = []
+  const listeners = {
+    added: [],
+    removed: [],
+    add(type, handler) { this.added.push([type, handler]) },
+    remove(type) { this.removed.push(type) },
+  }
+  let tick = null
+  let cleared = null
+  let visible = true
+  let clock = 1000
+  const values = [
+    { status: 'ready', source: 'apiKey', checkedAt: 1000, wallets: [{ currency: 'CNY', total: '100.00', toppedUp: '100.00', granted: '0.00' }] },
+    { status: 'ready', source: 'apiKey', checkedAt: 2000, wallets: [{ currency: 'CNY', total: '99.00', toppedUp: '99.00', granted: '0.00' }] },
+  ]
+  const lastValue = values[1]
+  const monitor = api.createBalanceMonitor({
+    source: 'apiKey',
+    fetchValue: async () => values.shift() ?? lastValue,
+    recordValue: (value, at) => {
+      recorded.push({ value, at })
+      return { spentToday: { CNY: 1 }, toppedUpToday: { CNY: 0 } }
+    },
+    onState: state => states.push(state),
+    now: () => clock,
+    setIntervalImpl: (callback, delay) => {
+      tick = { callback, delay }
+      return tick
+    },
+    clearIntervalImpl: handle => { cleared = handle },
+    listeners,
+    isVisible: () => visible,
+  })
+  await monitor.run(true)
+  assert.equal(states.length, 1)
+  assert.equal(states[0].status, 'ready')
+  assert.equal(states[0].requestedSource, 'apiKey')
+  assert.equal(states[0].spend.spentToday.CNY, 1)
+  assert.equal(recorded.length, 1)
+  assert.equal(recorded[0].at, 1000)
+  assert.equal(tick.delay, api.BALANCE_POLL_MS)
+
+  clock = 61_000
+  tick.callback()
+  await flush()
+  assert.equal(states.length, 2)
+  assert.equal(recorded.length, 2)
+  assert.equal(recorded[1].at, 2000)
+
+  // Returning to a visible tab inside the cache window does not read again.
+  clock = 62_000
+  listeners.added.find(([type]) => type === 'visibilitychange')[1]()
+  await flush()
+  assert.equal(states.length, 2)
+
+  // Returning after the cache window reads again.
+  clock = 100_000
+  listeners.added.find(([type]) => type === 'visibilitychange')[1]()
+  await flush()
+  assert.equal(states.length, 3)
+
+  monitor.stop()
+  assert.equal(cleared, tick)
+  assert.deepEqual(listeners.removed, ['visibilitychange', 'online'])
+})
+
+test('the balance monitor keeps the last value through a failed poll', async () => {
+  const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+  const ready = { status: 'ready', source: 'apiKey', checkedAt: 1, wallets: [{ currency: 'CNY', total: '100.00', toppedUp: '100.00', granted: '0.00' }] }
+  let mode = 'ready'
+  let tick = null
+  const states = []
+  const monitor = api.createBalanceMonitor({
+    source: 'apiKey',
+    fetchValue: async () => {
+      if (mode === 'throw') throw new TypeError('offline')
+      if (mode === 'failed') return { status: 'failed', code: 'network' }
+      return ready
+    },
+    recordValue: () => null,
+    onState: state => states.push(state),
+    now: () => 0,
+    setIntervalImpl: callback => {
+      tick = callback
+      return 1
+    },
+    clearIntervalImpl: () => {},
+  })
+  await monitor.run(true)
+  assert.equal(states.length, 1)
+  assert.equal(states[0].status, 'ready')
+
+  mode = 'throw'
+  tick()
+  await flush()
+  assert.equal(states.length, 1, 'a thrown poll keeps the last value')
+
+  mode = 'failed'
+  tick()
+  await flush()
+  assert.equal(states.length, 1, 'a failed poll keeps the last value')
+  monitor.stop()
+
+  const firstStates = []
+  mode = 'throw'
+  const failing = api.createBalanceMonitor({
+    source: 'apiKey',
+    fetchValue: async () => { throw new TypeError('offline') },
+    recordValue: () => null,
+    onState: state => firstStates.push(state),
+    now: () => 0,
+    setIntervalImpl: () => 1,
+    clearIntervalImpl: () => {},
+  })
+  await failing.run(true)
+  assert.equal(firstStates.length, 1)
+  assert.equal(firstStates[0].status, 'failed')
+  failing.stop()
+})
+
+test('the ledger accumulates same-day drops and top-ups', () => {
+  const wallet = (total, currency = 'CNY') => ({
+    status: 'ready', source: 'apiKey', checkedAt: 0,
+    wallets: [{ currency, total, toppedUp: total, granted: '0.00' }],
+  })
+  const noon = new Date(2026, 10, 18, 12, 0, 0).getTime()
+  assert.deepEqual(api.recordBalanceReading(wallet('100.00'), noon), {
+    spentToday: { CNY: 0 }, toppedUpToday: { CNY: 0 },
+  })
+  assert.deepEqual(api.recordBalanceReading(wallet('98.50'), noon + 60_000), {
+    spentToday: { CNY: 1.5 }, toppedUpToday: { CNY: 0 },
+  })
+  assert.deepEqual(api.recordBalanceReading(wallet('97.00'), noon + 120_000), {
+    spentToday: { CNY: 3 }, toppedUpToday: { CNY: 0 },
+  })
+  assert.deepEqual(api.recordBalanceReading(wallet('102.00'), noon + 180_000), {
+    spentToday: { CNY: 3 }, toppedUpToday: { CNY: 5 },
+  })
+  assert.deepEqual(api.readTodaySpend(wallet('102.00'), noon + 180_000), {
+    spentToday: { CNY: 3 }, toppedUpToday: { CNY: 5 },
+  })
+  // A gap larger than fifteen minutes re-seeds rather than attributing old usage.
+  assert.deepEqual(api.recordBalanceReading(wallet('100.00'), noon + 180_000 + 16 * 60_000), {
+    spentToday: { CNY: 3 }, toppedUpToday: { CNY: 5 },
+  })
+  assert.deepEqual(api.recordBalanceReading(wallet('99.00'), noon + 180_000 + 17 * 60_000), {
+    spentToday: { CNY: 4 }, toppedUpToday: { CNY: 5 },
+  })
+})
+
+test('the ledger keeps sources, currencies, and days apart', () => {
+  const balance = (source, currency, total) => ({
+    status: 'ready', source, checkedAt: 0,
+    wallets: [{ currency, total, toppedUp: total, granted: '0.00' }],
+  })
+  const noon = new Date(2026, 10, 18, 12, 0, 0).getTime()
+  api.recordBalanceReading(balance('apiKey', 'CNY', '100.00'), noon)
+  api.recordBalanceReading(balance('account', 'CNY', '100.00'), noon)
+  api.recordBalanceReading(balance('apiKey', 'CNY', '90.00'), noon + 60_000)
+  api.recordBalanceReading(balance('account', 'CNY', '80.00'), noon + 60_000)
+  assert.deepEqual(api.readTodaySpend(balance('apiKey', 'CNY', '90.00'), noon + 60_000).spentToday, { CNY: 10 })
+  assert.deepEqual(api.readTodaySpend(balance('account', 'CNY', '80.00'), noon + 60_000).spentToday, { CNY: 20 })
+
+  const nextDay = new Date(2026, 10, 19, 0, 1, 0).getTime()
+  api.recordBalanceReading(balance('apiKey', 'CNY', '70.00'), nextDay)
+  assert.deepEqual(api.readTodaySpend(balance('apiKey', 'CNY', '70.00'), nextDay).spentToday, { CNY: 0 })
+})
+
+test('the ledger separates currencies', () => {
+  const balance = (cny, usd) => ({
+    status: 'ready', source: 'apiKey', checkedAt: 0,
+    wallets: [
+      { currency: 'CNY', total: cny, toppedUp: cny, granted: '0.00' },
+      { currency: 'USD', total: usd, toppedUp: usd, granted: '0.00' },
+    ],
+  })
+  const noon = new Date(2026, 10, 18, 12, 0, 0).getTime()
+  api.recordBalanceReading(balance('100.00', '50.00'), noon)
+  const after = balance('90.00', '47.50')
+  assert.deepEqual(api.recordBalanceReading(after, noon + 60_000).spentToday, { CNY: 10, USD: 2.5 })
+  assert.deepEqual(api.readTodaySpend(after, noon + 60_000).toppedUpToday, { CNY: 0, USD: 0 })
+})
+
+test('the ledger tolerates blocked storage and keeps eight days', () => {
+  const wallet = (total) => ({
+    status: 'ready', source: 'apiKey', checkedAt: 0,
+    wallets: [{ currency: 'CNY', total, toppedUp: total, granted: '0.00' }],
+  })
+  for (let index = 0; index < 10; index += 1) {
+    api.recordBalanceReading(wallet('100.00'), new Date(2026, 10, 1 + index, 12).getTime())
+  }
+  assert.equal(Object.keys(api.readLedger().days).length, api.BALANCE_DAY_LIMIT)
+
+  const original = globalThis.localStorage
+  try {
+    globalThis.localStorage = {
+      getItem: () => null,
+      setItem: () => { throw new Error('blocked') },
+      removeItem: () => {},
+    }
+    assert.equal(api.recordBalanceReading(wallet('99.00'), Date.now()), null)
+  } finally {
+    globalThis.localStorage = original
+  }
+})
+
+test('the card shows balance, split, tracked today, and top-ups', () => {
+  const balance = {
+    status: 'ready', source: 'apiKey', requestedSource: 'apiKey', checkedAt: 1, available: true,
+    wallets: [{ currency: 'CNY', total: '110.00', toppedUp: '100.00', granted: '10.00' }],
+    spend: { spentToday: { CNY: 1.2 }, toppedUpToday: { CNY: 5 } },
+  }
+  const settings = { icon: 'sunMoon', clock: '24h', detail: 'all', balance: 'show' }
+  const route = { provider: 'deepseek-official', model: 'deepseek-flash' }
+  const view = api.describe(at('2026-11-19', '13:08'), t, route, settings, balance)
+  assert.match(view.tooltip, /Off-peak rate[^\n]*\nBalance: ¥110\.00/)
+  assert.ok(view.tooltip.includes('Topped up ¥100.00 · Granted ¥10.00'))
+  assert.match(view.tooltip, /Tracked today: ¥1\.20/)
+  assert.match(view.tooltip, /Topped up today: ¥5\.00/)
+  const noTopUp = { ...balance, spend: { spentToday: { CNY: 1.2 }, toppedUpToday: { CNY: 0 } } }
+  assert.equal(api.describe(at('2026-11-19', '13:08'), t, route, settings, noTopUp).tooltip.includes('Topped up today'), false)
+  const hidden = api.describe(at('2026-11-19', '13:08'), t, route, { ...settings, balance: 'hide' }, balance)
+  assert.equal(hidden.tooltip.includes('Balance:'), false)
+  const minimal = api.describe(at('2026-11-19', '13:08'), t, route, { ...settings, detail: 'minimal' }, balance)
+  assert.equal(minimal.lines.length, 2)
+})
+
+test('balance failures and missing sources stay short', () => {
+  assert.match(api.balanceLines({ status: 'loading' }, t)[0], /checking/)
+  assert.match(api.balanceLines({ status: 'unconfigured', requestedSource: 'apiKey' }, t)[0], /API key/)
+  assert.match(api.balanceLines({ status: 'unconfigured', requestedSource: 'account' }, t)[0], /sign in/)
+  assert.match(api.balanceLines({ status: 'failed', code: 'unauthorized', requestedSource: 'apiKey' }, t)[0], /rejected/)
+  assert.match(api.balanceLines({ status: 'failed', code: 'network', requestedSource: 'apiKey' }, t)[0], /unavailable/)
+  assert.match(api.balanceLines({ status: 'failed', code: 'missing' }, t)[0], /restart/i)
+  const ready = {
+    status: 'ready', source: 'apiKey',
+    wallets: [{ currency: 'USD', total: '0.00', toppedUp: '0.00', granted: '0.00' }],
+    available: false,
+  }
+  assert.ok(api.balanceLines(ready, t).some(line => line.includes('too low')))
+})
+
+test('the settings status names the source and tracked spend', () => {
+  const status = {
+    status: 'ready', source: 'apiKey', checkedAt: 1,
+    wallets: [{ currency: 'CNY', total: '110.00', toppedUp: '100.00', granted: '10.00' }],
+    spend: { spentToday: { CNY: 1.2 }, toppedUpToday: { CNY: 0 } },
+  }
+  const text = api.balanceStatusText(status, t)
+  assert.match(text, /¥110\.00/)
+  assert.match(text, /tracked today ¥1\.20/)
+  assert.match(text, /API key/)
+  assert.equal(api.balanceStatusText({ status: 'hidden' }, t), 'Hidden')
+  assert.equal(api.balanceStatusText({ status: 'loading' }, t), 'Checking…')
+  assert.equal(api.balanceStatusText({ status: 'unconfigured' }, t), 'No key or sign-in')
+  assert.equal(api.balanceStatusText({ status: 'failed', code: 'unauthorized' }, t), 'Credential rejected')
+  assert.equal(api.balanceStatusText({ status: 'failed', code: 'missing' }, t), 'Restart the Harness')
+})
+
+test('the balance route read validates, caches, and retries failures', async () => {
+  const originalFetch = globalThis.fetch
+  const calls = []
+  const payload = {
+    status: 'ready', source: 'apiKey', available: true, checkedAt: 1,
+    wallets: [{ currency: 'CNY', total: '110.00', toppedUp: '100.00', granted: '10.00' }],
+  }
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init })
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  try {
+    const first = await api.fetchBalance('apiKey')
+    assert.equal(first.status, 'ready')
+    assert.equal(calls[0].url, '/peak-price-pal/balance?source=apiKey')
+    assert.equal(calls[0].init.credentials, 'same-origin')
+    assert.equal(calls[0].init.cache, 'no-store')
+    const second = await api.fetchBalance('apiKey')
+    assert.equal(second, first)
+    assert.equal(calls.length, 1)
+
+    calls.length = 0
+    globalThis.fetch = async (url, init) => {
+      calls.push({ url, init })
+      return new Response('nope', { status: 500 })
+    }
+    assert.equal((await api.fetchBalance('account')).code, 'failed')
+    assert.equal((await api.fetchBalance('account')).code, 'failed')
+    assert.equal(calls.length, 2, 'a failure is not cached')
+
+    globalThis.fetch = async () => new Response('not json', { status: 200 })
+    assert.equal((await api.fetchBalance('auto')).code, 'protocol')
+
+    globalThis.fetch = async () => new Response('not found', { status: 404 })
+    assert.equal((await api.fetchBalance('auto')).code, 'missing')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('the client and Host agree on the balance route', () => {
+  const hostSource = readFileSync(join(root, 'index.js'), 'utf8')
+  assert.ok(hostSource.includes(`'${api.BALANCE_PATH}'`))
+  assert.equal(api.BALANCE_PATH, '/peak-price-pal/balance')
 })
 
 test('the provider gate is DeepSeek-only', () => {
@@ -437,7 +805,7 @@ test('the English and Chinese dictionaries stay in step', () => {
 test('the manifest, patch, locale, and display files are complete', () => {
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   assert.equal(manifest.name, 'dsh-peak-price-pal')
-  assert.equal(manifest.version, '0.3.0')
+  assert.equal(manifest.version, '0.4.0')
   assert.equal(manifest.license, 'MIT')
   assert.equal(manifest.dsh.bundle.patch, './cordis.patch.yml')
   assert.equal(manifest.dsh.client.platform, 'web')
@@ -447,7 +815,9 @@ test('the manifest, patch, locale, and display files are complete', () => {
   assert.equal(manifest.exports['./locale/*.json'], './locale/*.json')
   assert.equal(manifest.exports['./icon'], './icon.svg')
   assert.ok(manifest.files.includes('client.js'))
+  assert.ok(manifest.files.includes('index.js'))
   assert.ok(manifest.files.includes('docs'))
+  assert.equal(manifest.exports['.'], './index.js')
 
   const patch = readFileSync(join(root, 'cordis.patch.yml'), 'utf8')
   assert.match(patch, /id: peak-price-pal/)
@@ -498,6 +868,7 @@ test('the client keeps the no-dependency contract and the CSS order', () => {
   assert.ok(api.CSS.includes('.ppp_settings{'))
   assert.ok(api.CSS.includes('.ppp_settingRow{'))
   assert.ok(api.CSS.includes('.ppp_choice{'))
+  assert.ok(api.CSS.includes('.ppp_balanceValue{'))
   assert.ok(api.CSS.includes('--dsw-alias-bg-layer-2'))
 })
 
