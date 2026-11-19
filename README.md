@@ -14,9 +14,9 @@ The preview shows the two glyphs and where the logo sits in the composer row.
 - A green moon while off-peak rates apply.
 - Nothing at all on a third-party provider such as OpenRouter, even when the model name says DeepSeek.
 
-Hover the logo for the full picture. The title shows your local time, Beijing time, the next switch with a countdown, the peak rule, today's status in Beijing, and the provider and model behind the reading.
+Hover the logo for the full picture. The card shows your local time, Beijing time, the next switch with a countdown, the peak rule, today's status in Beijing, and the provider and model behind the reading. The words peak and off-peak carry the same amber and green as the logo.
 
-There is no click and no settings panel.
+There is no click action and no settings panel.
 
 ## The billing window
 
@@ -50,7 +50,7 @@ DeepSeek can change these numbers. But the plugin does not quote them. It only t
 
 The peak rule excludes Chinese public holidays. The plugin carries the 2026 and 2027 off-days from the State Council's published calendar, through [holiday-cn](https://github.com/NateScarlet/holiday-cn). The [2026 notice](https://www.gov.cn/zhengce/zhengceku/202511/content_7047091.htm) and the [2027 notice](https://www.gov.cn/zhengce/zhengceku/202611/content_7085102.htm) are the primary sources.
 
-When the clock reaches a year the plugin does not carry, it falls back to the weekday rule and says so in the hover text. A later release can add the year.
+When the clock reaches a year the plugin does not carry, it falls back to the weekday rule and says so in the hover card. A later release can add the year.
 
 The plugin makes no network request, before or after.
 
@@ -72,7 +72,7 @@ For a local copy, paste the folder's full path instead. The install dialog accep
 
 ## Use
 
-The logo is the last item in the line under the input, past the context ring. It has no click and no settings. Hover it when you want the numbers.
+The logo is the last item in the line under the input, past the context ring. It has no click action and no settings. Hover or focus it when you want the numbers. The card stays open while the pointer rests on it, so the text can be selected and copied.
 
 Switch the model to an OpenRouter route and the logo disappears. Switch back to a DeepSeek route and it returns. And the change lands as soon as the session's model store changes.
 
@@ -86,7 +86,6 @@ The plugin reads the current provider and model from the page and keeps the valu
 - The logo shows the window, not your bill. It does not estimate spend.
 - Prices can change. The table has the date it was checked.
 - The holiday calendar covers 2026 and 2027. Later years need an update.
-- The full details are a native hover title. There is no touch or click path to the same text.
 - A session with no readable model route shows no logo.
 - Subagent sessions show no logo.
 
@@ -98,4 +97,4 @@ The repository has no build step and no runtime dependencies.
 npm test
 ```
 
-The test file starts the browser module in Node with a small React stub, then checks the time math, the holiday table, the model gate, the manifest, the locale keys, the icon, and the slot registration. Edit `client.js` and refresh the page to see the change. Edit `index.js`, `package.json`, or `cordis.patch.yml` and restart the Harness.
+The test file starts the browser module in Node with small React and react-dom stubs, then checks the time math, the holiday table, the model gate, the manifest, the locale keys, the icon, and the slot registration. Edit `client.js` and refresh the page to see the change. Edit `index.js`, `package.json`, or `cordis.patch.yml` and restart the Harness.

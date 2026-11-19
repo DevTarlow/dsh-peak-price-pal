@@ -21,8 +21,14 @@ const React = {
   useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}],
   useEffect: () => {},
   useMemo: callback => callback(),
+  useRef: initial => ({ current: initial ?? null }),
   useId: () => ':r0:',
   useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),
+}
+
+/** Minimal `react-dom` surface; the card portal is not opened in these tests. */
+const ReactDOM = {
+  createPortal: (element, container) => ({ type: 'portal', element, container }),
 }
 
 /** Captured `window.__ModuleLoader__.load` definition. */
@@ -39,6 +45,7 @@ await import(new URL('../client.js', import.meta.url).href)
 assert.ok(moduleDefinition, 'client.js registers a module')
 const plugin = moduleDefinition.factory(name => {
   if (name === 'react') return React
+  if (name === 'react-dom') return ReactDOM
   throw new Error(`unexpected require: ${name}`)
 })
 const api = plugin.__peakPricePal
@@ -239,6 +246,15 @@ test('the hover text carries the state, time, rule, and route', () => {
   assert.match(view.tooltip, /Peak: Monday to Friday/)
   assert.match(view.tooltip, /Today in Beijing: a workday/)
   assert.match(view.tooltip, /DeepSeek route: deepseek-official \/ deepseek-flash/)
+  const flattened = view.lines.map(line => line.map(segment => segment.text).join('')).join('\n')
+  assert.equal(flattened, view.tooltip)
+  const firstLine = view.lines[0]
+  assert.ok(firstLine.some(segment => segment.tone === 'offPeak' && segment.text === 'Off-peak'))
+  assert.ok(firstLine.some(segment => segment.tone === 'peak' && segment.text === 'peak'))
+  const nextLine = view.lines.find(line => line.map(segment => segment.text).join('').startsWith('Next:'))
+  assert.ok(nextLine.some(segment => segment.tone === 'peak'))
+  const ruleLine = view.lines.find(line => line.map(segment => segment.text).join('').startsWith('Peak:'))
+  assert.ok(ruleLine.some(segment => segment.tone === 'peak'))
   const peakView = api.describe(at('2026-11-19', '10:00'), t, {
     provider: 'deepseek-official',
     model: 'deepseek-flash',
@@ -257,6 +273,30 @@ test('the hover text carries the state, time, rule, and route', () => {
   assert.match(yearBoundary.tooltip, /Chinese holiday calendar for 2028 is not bundled/)
 })
 
+test('the colored words pick the longer term first', () => {
+  const segments = api.highlightWords('Off-peak and peak', [
+    { word: 'peak', tone: 'peak' },
+    { word: 'Off-peak', tone: 'offPeak' },
+  ])
+  assert.deepEqual(segments.map(segment => [segment.text, segment.tone]), [
+    ['Off-peak', 'offPeak'],
+    [' and ', null],
+    ['peak', 'peak'],
+  ])
+  assert.deepEqual(api.highlightWords('plain', []), [{ text: 'plain', tone: null }])
+})
+
+test('the Chinese hover segments use the Chinese state words', () => {
+  const zhT = (key, vars) => api.ZH[key].replace(/\{(\w+)\}/g, (_, name) => String(vars[name]))
+  const view = api.describe(at('2026-11-19', '13:08'), zhT, {
+    provider: 'deepseek-official',
+    model: 'deepseek-flash',
+  })
+  const firstLine = view.lines[0]
+  assert.ok(firstLine.some(segment => segment.tone === 'offPeak' && segment.text === '空闲'))
+  assert.ok(firstLine.some(segment => segment.tone === 'peak' && segment.text === '高峰'))
+})
+
 test('the English and Chinese dictionaries stay in step', () => {
   const enKeys = Object.keys(api.EN).sort()
   const zhKeys = Object.keys(api.ZH).sort()
@@ -270,7 +310,7 @@ test('the English and Chinese dictionaries stay in step', () => {
 test('the manifest, patch, locale, and display files are complete', () => {
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   assert.equal(manifest.name, 'dsh-peak-price-pal')
-  assert.equal(manifest.version, '0.1.0')
+  assert.equal(manifest.version, '0.2.0')
   assert.equal(manifest.license, 'MIT')
   assert.equal(manifest.dsh.bundle.patch, './cordis.patch.yml')
   assert.equal(manifest.dsh.client.platform, 'web')
@@ -311,6 +351,7 @@ test('the client keeps the no-dependency contract and the CSS order', () => {
   assert.match(source, /window\.__ModuleLoader__\.load/)
   assert.match(source, /id: 'dsh-peak-price-pal'/)
   assert.match(source, /require\('react'\)/)
+  assert.match(source, /require\('react-dom'\)/)
   assert.equal(source.includes('@deepseek-ai/dsh-client-'), false)
   assert.equal(/#[0-9a-f]{3,8}/i.test(api.CSS), false)
   assert.match(api.CSS, /order:1/)
@@ -321,6 +362,12 @@ test('the client keeps the no-dependency contract and the CSS order', () => {
   assert.ok(api.CSS.includes('color-mix(in srgb, var(--dsw-alias-state-warn-primary) 75%'))
   assert.ok(api.CSS.includes('color-mix(in srgb, var(--dsw-alias-state-success-primary) 75%'))
   assert.ok(api.CSS.includes('.ppp_sr{'))
+  assert.ok(api.CSS.includes('.ppp_card{'))
+  assert.ok(api.CSS.includes('.ppp_tonePeak{'))
+  assert.ok(api.CSS.includes('.ppp_toneOffPeak{'))
+  assert.ok(api.CSS.includes('@position-try --ppp-card-end'))
+  assert.ok(api.CSS.includes('anchor(top)'))
+  assert.ok(api.CSS.includes(':focus-visible'))
 })
 
 test('apply registers the dock entry and resolves the model store', () => {
@@ -390,7 +437,7 @@ test('the component hides on a third-party route and on a subagent', () => {
   assert.equal(unknown, null)
 })
 
-test('the live logo renders a title with the current details', () => {
+test('the live logo is focusable and exposes the full description', () => {
   const tree = api.live({
     route: { provider: 'deepseek-official', model: 'deepseek-flash' },
     t,
@@ -399,14 +446,16 @@ test('the live logo renders a title with the current details', () => {
   const span = tree.children.find(child => child.type === 'span')
   assert.ok(span, 'the logo span renders')
   assert.equal(span.props.role, 'img')
-  assert.match(span.props.title, /Beijing:/)
-  assert.match(span.props.title, /DeepSeek route: deepseek-official \/ deepseek-flash/)
-  assert.match(span.props.title, /Peak rate|Off-peak rate/)
+  assert.equal(span.props.tabIndex, 0)
+  assert.equal(span.props.style.anchorName, '--ppp-anchor-r0')
+  assert.equal(span.props.title, undefined)
   assert.match(span.props.className, /ppp/)
   assert.ok(['peak', 'off-peak'].includes(span.props['data-peak-price-pal']))
   assert.match(span.props['aria-label'], /^Peak Price Pal: (peak|off-peak) rate$/)
-  assert.match(span.props['aria-describedby'], /^ppp-desc-/)
+  assert.equal(span.props['aria-describedby'], 'ppp-desc-r0')
   const hidden = span.children.find(child => child.type === 'span' && child.props.className === 'ppp_sr')
   assert.ok(hidden, 'the full description is exposed to assistive technology')
+  assert.equal(hidden.props.id, 'ppp-desc-r0')
   assert.match(hidden.children.join(' '), /DeepSeek route: deepseek-official \/ deepseek-flash/)
+  assert.equal(tree.children.includes(null), true, 'the card stays closed until hover or focus')
 })

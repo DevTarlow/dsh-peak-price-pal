@@ -17,8 +17,10 @@ window.__ModuleLoader__.load({
   id: 'dsh-peak-price-pal',
   factory(require) {
     const React = require('react')
+    const ReactDOM = require('react-dom')
     const h = React.createElement
-    const { useEffect, useId, useMemo, useState, useSyncExternalStore } = React
+    const { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } = React
+    const { createPortal } = ReactDOM
 
     /** Locale namespace for the synthesized `t` seat and the meta files. */
     const NS = 'peak-price-pal'
@@ -378,6 +380,8 @@ window.__ModuleLoader__.load({
       'duration.minutes': '{minutes}m',
       'logo.ariaPeak': 'Peak Price Pal: peak rate',
       'logo.ariaOffPeak': 'Peak Price Pal: off-peak rate',
+      'word.peak': 'Peak',
+      'word.offPeak': 'Off-peak',
       'period.peak': 'peak',
       'period.offPeak': 'off-peak',
       'today.workday': 'a workday',
@@ -419,6 +423,8 @@ window.__ModuleLoader__.load({
       'duration.minutes': '{minutes} 分钟',
       'logo.ariaPeak': '峰谷小助手：高峰价',
       'logo.ariaOffPeak': '峰谷小助手：空闲价',
+      'word.peak': '高峰',
+      'word.offPeak': '空闲',
       'period.peak': '高峰',
       'period.offPeak': '空闲',
       'today.workday': '工作日',
@@ -455,15 +461,58 @@ window.__ModuleLoader__.load({
       ))
     }
 
+    /**
+     * Escape a literal string for use inside a regular expression.
+     * @param {string} value - Literal text.
+     * @returns {string} Escaped text.
+     */
+    function escapeRegExp(value) {
+      return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    }
+
+    /**
+     * Split a line into plain and state-colored segments.
+     * Longer terms win so `Off-peak` is one segment instead of `Off-` plus `peak`.
+     * @param {string} text - One line of the hover card.
+     * @param {{ word: string, tone: 'peak' | 'offPeak' }[]} terms - Words to color.
+     * @returns {{ text: string, tone: 'peak' | 'offPeak' | null }[]} Ordered segments.
+     */
+    function highlightWords(text, terms) {
+      const usable = terms.filter(term => typeof term.word === 'string' && term.word !== '')
+      if (usable.length === 0) return [{ text, tone: null }]
+      const ordered = [...usable].sort((left, right) => right.word.length - left.word.length)
+      const tones = new Map(ordered.map(term => [term.word.toLowerCase(), term.tone]))
+      const pattern = new RegExp(`(${ordered.map(term => escapeRegExp(term.word)).join('|')})`, 'gi')
+      const segments = []
+      let last = 0
+      for (const match of text.matchAll(pattern)) {
+        if (match.index > last) segments.push({ text: text.slice(last, match.index), tone: null })
+        segments.push({ text: match[0], tone: tones.get(match[0].toLowerCase()) ?? null })
+        last = match.index + match[0].length
+      }
+      if (last < text.length) segments.push({ text: text.slice(last), tone: null })
+      return segments
+    }
+
     /** Component-local styles; a theme token drives every color. */
     const CSS = `
 .ppp{order:1;position:relative;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;flex:none;width:20px;height:20px;border-radius:999px;color:var(--dsw-alias-label-secondary);line-height:1;cursor:help;transition:background-color 120ms ease}
 @media (hover:hover){.ppp:hover{background:var(--dsw-alias-interactive-bg-hover)}}
+.ppp:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
 .ppp_peak{color:color-mix(in srgb, var(--dsw-alias-state-warn-primary) 75%, var(--dsw-alias-label-primary))}
 .ppp_valley{color:color-mix(in srgb, var(--dsw-alias-state-success-primary) 75%, var(--dsw-alias-label-primary))}
 .ppp svg{display:block;width:16px;height:16px;pointer-events:none}
 .ppp_sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
-@media (prefers-reduced-motion:reduce){.ppp{transition:none}}
+.ppp_card{position:fixed;z-index:1200;box-sizing:border-box;position-area:none;top:auto;right:auto;bottom:calc(anchor(top) + 8px);left:calc(anchor(left) + (anchor(right) - anchor(left)) / 2);transform:translateX(-50%);width:min(340px, calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow-y:auto;margin:0;padding:10px 12px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-tooltip-bg);color:var(--dsw-alias-tooltip-label);box-shadow:var(--dsw-elevation-prominent);font-size:12px;line-height:18px;font-variant-numeric:tabular-nums;white-space:normal;overflow-wrap:anywhere;pointer-events:auto;cursor:default;user-select:text;text-align:left;animation:ppp-card-in 120ms ease-out;position-try-fallbacks:--ppp-card-end, --ppp-card-start, --ppp-card-top}
+.ppp_cardLine:first-child{font-weight:500}
+.ppp_cardLine + .ppp_cardLine{margin-top:2px}
+.ppp_tonePeak{color:var(--dsw-alias-state-warn-primary);font-weight:600}
+.ppp_toneOffPeak{color:var(--dsw-alias-state-success-primary);font-weight:600}
+@keyframes ppp-card-in{from{opacity:0}to{opacity:1}}
+@position-try --ppp-card-end{left:auto;right:12px;transform:none}
+@position-try --ppp-card-start{left:12px;right:auto;transform:none}
+@position-try --ppp-card-top{top:12px;bottom:auto;left:12px;right:12px;width:auto;max-width:none;transform:none;max-height:calc(100dvh - 24px);overflow-y:auto}
+@media (prefers-reduced-motion:reduce){.ppp{transition:none}.ppp_card{animation:none}}
 `.trim()
 
     /** A sun glyph for the peak window. */
@@ -563,7 +612,7 @@ window.__ModuleLoader__.load({
      * @param {number} ms - Epoch milliseconds.
      * @param {(key: string, vars?: Record<string, unknown>) => string} t - Translate seat.
      * @param {{ provider: string, model: string }} route - DeepSeek route.
-     * @returns {{ peak: boolean, tooltip: string }} View model.
+     * @returns {{ peak: boolean, tooltip: string, lines: { text: string, tone: 'peak' | 'offPeak' | null }[][] }} View model.
      */
     function describe(ms, t, route) {
       const peak = isPeak(ms)
@@ -603,27 +652,89 @@ window.__ModuleLoader__.load({
       }
       const routeText = route.model === '' ? route.provider : `${route.provider} / ${route.model}`
       lines.push(t('tip.model', { route: routeText }))
-      return { peak, tooltip: lines.join('\n') }
+      const highlightTerms = [
+        { word: t('word.offPeak'), tone: 'offPeak' },
+        { word: t('word.peak'), tone: 'peak' },
+      ]
+      return {
+        peak,
+        tooltip: lines.join('\n'),
+        lines: lines.map(line => highlightWords(line, highlightTerms)),
+      }
     }
 
     /** The live logo, mounted only while the route is DeepSeek. */
     function PeakPricePalLive({ route, t }) {
       const now = useNow()
       const view = useMemo(() => describe(now, t, route), [now, t, route])
-      const descriptionId = `ppp-desc-${String(useId()).replace(/[^a-zA-Z0-9_-]/g, '')}`
+      const [hovered, setHovered] = useState(false)
+      const [focused, setFocused] = useState(false)
+      const closeTimer = useRef(null)
+      const instanceId = String(useId()).replace(/[^a-zA-Z0-9_-]/g, '')
+      const descriptionId = `ppp-desc-${instanceId}`
+      const anchorName = `--ppp-anchor-${instanceId}`
+      useEffect(() => () => {
+        if (closeTimer.current !== null) clearTimeout(closeTimer.current)
+      }, [])
+      const showCard = () => {
+        if (closeTimer.current !== null) {
+          clearTimeout(closeTimer.current)
+          closeTimer.current = null
+        }
+        setHovered(true)
+      }
+      const hideCardSoon = () => {
+        if (closeTimer.current !== null) clearTimeout(closeTimer.current)
+        closeTimer.current = setTimeout(() => {
+          closeTimer.current = null
+          setHovered(false)
+        }, 180)
+      }
+      const card = hovered || focused
+        ? createPortal(
+          h('div', {
+            className: 'ppp_card',
+            style: { positionAnchor: anchorName },
+            'aria-hidden': 'true',
+            onMouseEnter: showCard,
+            onMouseLeave: hideCardSoon,
+          },
+          view.lines.map((line, lineIndex) => h('div', {
+            key: `line-${lineIndex}`,
+            className: 'ppp_cardLine',
+          }, line.map((segment, segmentIndex) => (
+            segment.tone === null
+              ? segment.text
+              : h('span', {
+                key: `segment-${segmentIndex}`,
+                className: segment.tone === 'peak' ? 'ppp_tonePeak' : 'ppp_toneOffPeak',
+              }, segment.text)
+          ))))),
+          document.body,
+        )
+        : null
       return h(React.Fragment, null,
         h('style', { key: 'ppp-style' }, CSS),
         h('span', {
           key: 'ppp-logo',
           className: view.peak ? 'ppp ppp_peak' : 'ppp ppp_valley',
           role: 'img',
-          title: view.tooltip,
+          tabIndex: 0,
+          style: { anchorName },
           'aria-label': t(view.peak ? 'logo.ariaPeak' : 'logo.ariaOffPeak'),
           'aria-describedby': descriptionId,
           'data-peak-price-pal': view.peak ? 'peak' : 'off-peak',
+          onMouseEnter: showCard,
+          onMouseLeave: hideCardSoon,
+          onFocus: () => setFocused(true),
+          onBlur: () => setFocused(false),
+          onKeyDown: event => {
+            if (event.key === 'Escape') event.currentTarget.blur()
+          },
         },
         h(view.peak ? SunGlyph : MoonGlyph),
-        h('span', { className: 'ppp_sr', id: descriptionId }, view.tooltip)))
+        h('span', { className: 'ppp_sr', id: descriptionId }, view.tooltip)),
+        card)
     }
 
     /** Gate the entry on the provider route before mounting the clock. */
@@ -698,6 +809,7 @@ window.__ModuleLoader__.load({
         projectionRoute,
         directoryStore,
         describe,
+        highlightWords,
         translateFallback,
         holidayFor,
         holidayYears: Object.keys(HOLIDAY_SCHEDULE).map(Number),

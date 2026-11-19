@@ -1,6 +1,6 @@
 {
   "name": "dsh-peak-price-pal",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "A DeepSeek Harness plugin: a small sun or moon under the composer shows whether DeepSeek is billing at peak or off-peak rates.",
