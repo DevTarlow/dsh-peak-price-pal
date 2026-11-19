@@ -98,6 +98,16 @@ The plugin reads the current provider and model from the page and keeps the valu
 - A session with no readable model route shows no logo.
 - Subagent sessions show no logo.
 
+## Acknowledgements
+
+Two projects inspired me to make Peak Price Pal.
+
+[Peak Valley](https://github.com/blueziii/dsh-peakvalley) is the closer one. It put the same peak and off-peak state under the DSH composer, next to the context ring, and its holiday handling pointed me at the public holiday calendar. I kept the placement idea and built the sun/moon logo and the colored hover card around it. The provider gate that hides the logo on OpenRouter is my own addition.
+
+[Price Track Buddy](https://github.com/DevTarlow/price-track-buddy) is my own GNOME Shell extension for Linux. It is where I first used the Beijing peak window and the local countdown in a tool I keep on the desktop. This plugin carries that habit into DSH.
+
+The code here is its own. The pricing rule comes from DeepSeek's public docs. The holiday dates come from the State Council notices through [holiday-cn](https://github.com/NateScarlet/holiday-cn). The UI is built on the DSH composer dock.
+
 ## Development
 
 The repository has no build step and no runtime dependencies.
