@@ -108,9 +108,9 @@ Open **Settings > Plugins > Peak Price Pal**.
 
 - **Icon**: the sun and moon, or a plain dot. The dot uses the same state color without a glyph.
 - **Clock**: 24-hour or 12-hour. It covers the current times, the next switch, and the rule line.
-- **Details**: all details, or minimal. Minimal keeps the current state and the next switch. It hides the balance rows but does not stop the reads; Hide does that.
+- **Details**: all details, or minimal. Minimal keeps the current state, the balance rows, and the next switch. It drops the time stamps, the rule, today's status, and the route. Tracking still runs; Hide is what stops it.
 - **Balance**: show or hide the balance and tracked-spend rows. Show reads once a minute while the Harness page is open. Hide stops the reads and the daily tracking.
-- **Balance source**: a read-only line that says which credential this page checked, API key or account, and today's tracked spend for that source.
+- **Balance source**: a read-only line that names the credential this page checked, API key or account. The amounts stay in the hover card.
 - **Reset to defaults** returns to the sun and moon, 24-hour, all details, and the balance shown.
 
 Changes apply as soon as you pick them. The display choices are saved in this browser, so another browser starts from the defaults.

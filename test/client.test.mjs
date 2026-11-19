@@ -232,7 +232,7 @@ test('the 12-hour setting reaches the timestamps and the rule', () => {
   assert.match(view.tooltip, /Next: peak in .*Thu 2026-11-19 2:00 PM Beijing/)
 })
 
-test('minimal details keep only the state and the next switch', () => {
+test('minimal details without a balance keep the state and the next switch', () => {
   const view = api.describe(at('2026-11-19', '13:08'), t, {
     provider: 'deepseek-official',
     model: 'deepseek-flash',
@@ -555,7 +555,13 @@ test('the card shows balance, split, tracked today, and top-ups', () => {
   const hidden = api.describe(at('2026-11-19', '13:08'), t, route, { ...settings, balance: 'hide' }, balance)
   assert.equal(hidden.tooltip.includes('Balance:'), false)
   const minimal = api.describe(at('2026-11-19', '13:08'), t, route, { ...settings, detail: 'minimal' }, balance)
-  assert.equal(minimal.lines.length, 2)
+  assert.match(minimal.tooltip, /\nBalance: ¥110\.00/)
+  assert.match(minimal.tooltip, /Tracked today: ¥1\.20/)
+  assert.match(minimal.tooltip, /\nNext: /)
+  assert.equal(minimal.tooltip.includes('Beijing:'), false)
+  const minimalHidden = api.describe(at('2026-11-19', '13:08'), t, route, { ...settings, detail: 'minimal', balance: 'hide' }, balance)
+  assert.equal(minimalHidden.tooltip.includes('Balance:'), false)
+  assert.equal(minimalHidden.lines.length, 2)
 })
 
 test('balance failures and missing sources stay short', () => {
@@ -573,16 +579,16 @@ test('balance failures and missing sources stay short', () => {
   assert.ok(api.balanceLines(ready, t).some(line => line.includes('too low')))
 })
 
-test('the settings status names the source and tracked spend', () => {
+test('the settings status names the source without the amounts', () => {
   const status = {
     status: 'ready', source: 'apiKey', checkedAt: 1,
     wallets: [{ currency: 'CNY', total: '110.00', toppedUp: '100.00', granted: '10.00' }],
     spend: { spentToday: { CNY: 1.2 }, toppedUpToday: { CNY: 0 } },
   }
   const text = api.balanceStatusText(status, t)
-  assert.match(text, /¥110\.00/)
-  assert.match(text, /tracked today ¥1\.20/)
-  assert.match(text, /API key/)
+  assert.equal(text, 'API key')
+  assert.equal(text.includes('¥'), false)
+  assert.equal(api.balanceStatusText({ ...status, source: 'account' }, t), 'Account')
   assert.equal(api.balanceStatusText({ status: 'hidden' }, t), 'Hidden')
   assert.equal(api.balanceStatusText({ status: 'loading' }, t), 'Checking…')
   assert.equal(api.balanceStatusText({ status: 'unconfigured' }, t), 'No key or sign-in')
@@ -805,7 +811,7 @@ test('the English and Chinese dictionaries stay in step', () => {
 test('the manifest, patch, locale, and display files are complete', () => {
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   assert.equal(manifest.name, 'dsh-peak-price-pal')
-  assert.equal(manifest.version, '0.4.0')
+  assert.equal(manifest.version, '0.5.0')
   assert.equal(manifest.license, 'MIT')
   assert.equal(manifest.dsh.bundle.patch, './cordis.patch.yml')
   assert.equal(manifest.dsh.client.platform, 'web')

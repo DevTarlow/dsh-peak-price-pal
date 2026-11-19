@@ -852,7 +852,8 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The read-only status shown on the settings page.
+     * The read-only status shown on the settings page: which credential it checked, and whether that worked.
+     * The amounts stay in the hover card.
      * @param {object} status - Settings status state.
      * @param {(key: string, vars?: Record<string, unknown>) => string} t - Translate seat.
      * @returns {string} Status text.
@@ -868,20 +869,9 @@ window.__ModuleLoader__.load({
       if (status.status !== 'ready' || !Array.isArray(status.wallets) || status.wallets.length === 0) {
         return t('settings.balance.unavailable')
       }
-      const amounts = status.wallets.map(wallet => formatMoney(wallet.total, wallet.currency)).join(' · ')
-      const spent = status.wallets
-        .map(wallet => {
-          const amount = status.spend?.spentToday?.[wallet.currency]
-          return amount === undefined ? null : formatMoney(amount, wallet.currency)
-        })
-        .filter(value => value !== null)
-        .join(' · ')
-      const source = t(status.source === 'account'
+      return t(status.source === 'account'
         ? 'settings.balance.source.account'
         : 'settings.balance.source.apiKey')
-      return spent === ''
-        ? t('settings.balance.status', { amounts, source })
-        : t('settings.balance.today', { amounts, spent, source })
     }
 
     /** The client cache for on-demand balance reads. */
@@ -1005,21 +995,19 @@ window.__ModuleLoader__.load({
       'settings.details': 'Details',
       'settings.details.all': 'All details',
       'settings.details.minimal': 'Minimal',
-      'settings.details.help': 'Minimal keeps the state and the next switch. Balance tracking still runs.',
+      'settings.details.help': 'Minimal keeps the state, the balance rows, and the next switch. Balance tracking still runs.',
       'settings.balance': 'Balance',
       'settings.balance.help': 'Shows your balance and tracked spend. The logo reads once a minute while the Harness page is open; this page reads once on open. Hide stops the reads.',
       'settings.balance.show': 'Show',
       'settings.balance.hide': 'Hide',
       'settings.balanceSource': 'Balance source',
-      'settings.balanceSource.help': 'The number this page checked. The card follows the current route.',
+      'settings.balanceSource.help': 'The credential this page checked. The amounts stay in the hover card.',
       'settings.balance.checking': 'Checking…',
       'settings.balance.hidden': 'Hidden',
       'settings.balance.unconfigured': 'No key or sign-in',
       'settings.balance.rejected': 'Credential rejected',
       'settings.balance.unavailable': 'Unavailable',
       'settings.balance.missing': 'Restart the Harness',
-      'settings.balance.status': '{amounts} · {source}',
-      'settings.balance.today': '{amounts} · tracked today {spent} · {source}',
       'settings.balance.source.apiKey': 'API key',
       'settings.balance.source.account': 'Account',
       'settings.reset': 'Reset to defaults',
@@ -1099,21 +1087,19 @@ window.__ModuleLoader__.load({
       'settings.details': '详情',
       'settings.details.all': '全部详情',
       'settings.details.minimal': '精简',
-      'settings.details.help': '精简模式只保留当前时段和下次切换；余额仍会跟踪。',
+      'settings.details.help': '精简模式保留当前时段、余额和下次切换；余额仍会跟踪。',
       'settings.balance': '余额',
       'settings.balance.help': '显示余额和今日已跟踪的消费。Harness 页面打开时徽标每分钟读取一次；打开本页时读取一次。选择“隐藏”可停止读取。',
       'settings.balance.show': '显示',
       'settings.balance.hide': '隐藏',
       'settings.balanceSource': '余额来源',
-      'settings.balanceSource.help': '本页检查到的数字。悬停卡会跟随当前路由。',
+      'settings.balanceSource.help': '本页检查到的凭据。金额只在悬停卡中显示。',
       'settings.balance.checking': '正在查询…',
       'settings.balance.hidden': '已隐藏',
       'settings.balance.unconfigured': '未找到密钥或登录',
       'settings.balance.rejected': '凭据被拒绝',
       'settings.balance.unavailable': '不可用',
       'settings.balance.missing': '需要重启 Harness',
-      'settings.balance.status': '{amounts} · {source}',
-      'settings.balance.today': '{amounts} · 今日已跟踪 {spent} · {source}',
       'settings.balance.source.apiKey': 'API 密钥',
       'settings.balance.source.account': '账户',
       'settings.reset': '恢复默认',
@@ -1459,13 +1445,7 @@ window.__ModuleLoader__.load({
         const timer = setTimeout(() => controller.abort(), BALANCE_TIMEOUT_MS)
         setStatus({ status: 'loading' })
         void fetchBalance('auto', controller.signal).then(value => {
-          if (!live) return
-          if (value.status === 'ready') {
-            const readingAt = Number.isFinite(value.checkedAt) ? value.checkedAt : Date.now()
-            setStatus({ ...value, spend: readTodaySpend(value, readingAt) })
-          } else {
-            setStatus(value)
-          }
+          if (live) setStatus(value)
         }).catch(() => {
           if (live) setStatus({ status: 'failed', code: 'failed' })
         })
@@ -1504,10 +1484,10 @@ window.__ModuleLoader__.load({
         if (nextLocal !== nextBeijing) nextLine += t('tip.nextLocal', { local: nextLocal })
       }
       const lines = [stateLine]
+      if (settings.balance !== 'hide') lines.push(...balanceLines(balance, t))
       if (settings.detail === 'minimal') {
         if (nextLine !== null) lines.push(nextLine)
       } else {
-        if (settings.balance !== 'hide') lines.push(...balanceLines(balance, t))
         lines.push(t('tip.beijing', { stamp: nowBeijing }))
         if (nowLocal !== nowBeijing) {
           lines.push(t('tip.local', {
