@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 16 16">
+  <defs>
+    <mask id="ppp-readme-moon" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16">
+      <rect width="16" height="16" fill="#ffffff"/>
+      <circle cx="10.6" cy="7.2" r="5.2" fill="#000000"/>
+    </mask>
+  </defs>
+  <circle cx="8" cy="8" r="6.2" fill="#1d984c" mask="url(#ppp-readme-moon)"/>
+</svg>
