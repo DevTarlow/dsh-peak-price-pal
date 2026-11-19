@@ -27,13 +27,28 @@ test/               the Node harness
 9. **Settings are browser-local, versioned, and live.** The `settings.plugins.tab` page writes the `dsh-peak-price-pal.settings.v1` store in `localStorage`; the logo and card read it through `useSyncExternalStore`. Unknown values fall back to defaults, and blocked storage keeps the in-memory choice for the page. Controls are custom and token-styled, never imported from a Harness Client package.
 10. **Display choices reach every surface.** The icon choice changes the logo glyph. The clock choice changes the current and next stamps and picks `tip.rule12`. Minimal detail keeps only the state line and the next-switch line, in the card and in the accessible description.
 
+## Documentation upkeep
+
+The README is part of the build. When a change affects what it describes, update it in the same task and commit. That covers behavior, defaults, settings, install steps, limits, privacy, prices, holidays, images, and the version.
+
+Keep the existing sections and voice. Weave the new detail into the section that already owns it. Rewrite only the text the change makes wrong. Do not reorder or restyle the README for a small update, and do not replace a working paragraph with a fresh one just because you are editing.
+
+The README keeps its plain product-note voice: concrete, varied sentence lengths, no stock AI phrases, no em dashes. Run the my-voice checker from the DSH checkout when it is available:
+
+```sh
+node <checkout>/.agents/skills/my-voice/scripts/voice-check.mjs README.md --format=note
+```
+
+This file follows the same rule. When an invariant, layout entry, or development step changes, update the relevant AGENTS.md section instead of rewriting the file.
+
 ## Development loop
 
 1. **Edit.** Keep `client.js` self-contained. Pure functions stay testable through the non-enumerable `__peakPricePal` face.
 2. **Verify.** Run `npm test`. It syntax-checks both JS files and runs the Node harness. There is no build or typecheck step.
-3. **Try it.** Edit `client.js` and refresh the Harness page. Edit `index.js`, `package.json`, or `cordis.patch.yml` and restart the Harness.
-4. **Commit.** One task, one commit. Imperative subject, no type prefix, no trailing period.
-5. **Push.** Only when the human explicitly asks. A green suite is not permission.
+3. **Update the docs.** If the change affects the README, update it in the same task. Keep its sections and voice, and rewrite only what the change makes wrong. Update this file the same way.
+4. **Try it.** Edit `client.js` and refresh the Harness page. Edit `index.js`, `package.json`, or `cordis.patch.yml` and restart the Harness.
+5. **Commit.** One task, one commit. Imperative subject, no type prefix, no trailing period.
+6. **Push.** Only when the human explicitly asks. A green suite is not permission.
 
 ## Git contract
 
