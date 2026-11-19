@@ -10,14 +10,17 @@ A small sun or moon under the composer tells you when DeepSeek is charging peak 
 DeepSeek halves its API rates outside peak hours. The window is fixed in Beijing time, so it lands at odd hours for most of the world. This plugin puts the current state beside the context ring, where you already look, and keeps the details and your balance one hover away.
 
 <p align="center">
-  <img src="docs/peak-price-pal-details.png" width="343" alt="The hover card with off-peak in green and peak in amber">
+  <img src="docs/ss-details-peak-bal-plugin.png" width="320" alt="Minimal details: off-peak in green and peak in amber, the balance, topped-up and granted parts, tracked today, and the next switch">
+  <img src="docs/peak-price-pal-details-full.png" width="320" alt="All details: the same card plus Beijing time, your local time, the peak rule, today's status, and the model route">
 </p>
+
+Both are real captures from 10:53 Pacific on 19 November, which is 02:53 in Beijing the next morning and six hours before the peak window opens. Minimal is on the left, all details on the right; the balance moved a cent between the two shots. The words for the current and next rate carry the same amber and green as the logo.
 
 <p align="center">
   <img src="docs/icon-screenshot-chat.png" width="698" alt="The composer row with the amber sun at the far right, past the 50% context ring">
 </p>
 
-The first image is the real hover card at 21:53 Pacific, seven minutes before the 14:00 Beijing peak switch. The second is the composer row in the peak state, with the amber sun at the far right past the 50% context ring. The words for the current and next rate carry the same amber and green as the logo. This capture predates the balance and spend rows.
+The composer row in the peak state, with the amber sun at the far right past the 50% context ring.
 
 ## What you see
 
@@ -114,6 +117,10 @@ Open **Settings > Plugins > Peak Price Pal**.
 - **Reset to defaults** returns to the sun and moon, 24-hour, all details, and the balance shown.
 
 Changes apply as soon as you pick them. The display choices are saved in this browser, so another browser starts from the defaults.
+
+<p align="center">
+  <img src="docs/settings.png" width="520" alt="The Peak Price Pal settings page under Settings > Plugins, with the icon, clock, details, and balance choices and the balance source line reading API key">
+</p>
 
 ## Privacy
 
