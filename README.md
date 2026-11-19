@@ -13,7 +13,11 @@ DeepSeek halves its API rates outside peak hours. The window is fixed in Beijing
   <img src="docs/peak-price-pal-details.png" width="343" alt="The hover card with off-peak in green and peak in amber">
 </p>
 
-The card above is the real hover card at 21:53 Pacific, seven minutes before the 14:00 Beijing peak switch. The words for the current and next rate carry the same amber and green as the logo.
+<p align="center">
+  <img src="docs/icon-screenshot-chat.png" width="698" alt="The composer row with the amber sun at the far right, past the 50% context ring">
+</p>
+
+The first image is the real hover card at 21:53 Pacific, seven minutes before the 14:00 Beijing peak switch. The second is the composer row in the peak state, with the amber sun at the far right past the 50% context ring. The words for the current and next rate carry the same amber and green as the logo.
 
 ## What you see
 
@@ -80,8 +84,6 @@ For a local copy, paste the folder's full path instead. The install dialog accep
 ## Use
 
 The logo is the last item in the line under the input, past the context ring. It has no click action and no settings. Hover or focus it when you want the numbers. The card stays open while the pointer rests on it, so the text can be selected and copied.
-
-![The sun logo in the composer row, to the right of the context ring](docs/preview.svg)
 
 Switch the model to an OpenRouter route and the logo disappears. Switch back to a DeepSeek route and it returns. And the change lands as soon as the session's model store changes.
 
