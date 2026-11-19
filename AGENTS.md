@@ -44,15 +44,25 @@ This file follows the same rule. When an invariant, layout entry, or development
 ## Development loop
 
 1. **Edit.** Keep `client.js` self-contained. Pure functions stay testable through the non-enumerable `__peakPricePal` face.
-2. **Verify.** Run `npm test`. It syntax-checks both JS files and runs the Node harness. There is no build or typecheck step.
+2. **Verify.** Run `npm test`. It syntax-checks both JS files and runs the Node harness. There is no build, typecheck, or lint step, and the suite finishes well under a second.
 3. **Update the docs.** If the change affects the README, update it in the same task. Keep its sections and voice, and rewrite only what the change makes wrong. Update this file the same way.
 4. **Try it.** Edit `client.js` and refresh the Harness page. Edit `index.js`, `package.json`, or `cordis.patch.yml` and restart the Harness.
-5. **Commit.** One task, one commit. Imperative subject, no type prefix, no trailing period.
-6. **Push.** Only when the human explicitly asks. A green suite is not permission.
+5. **Commit when the task is done.** One task, one commit. Commit as soon as the change is complete and the suite is green; do not wait for a push instruction. Imperative subject, no type prefix, no trailing period. Add a body explaining why for anything non-obvious.
+6. **Report.** Give the short SHA, the subject, the test result, and anything you could not verify. Say it has not been pushed.
+7. **Push only on an explicit instruction.** The human says "push", "push it", or "push that" when they are ready. That instruction covers the current commit, not the next one. A green suite, a finished task, or a previous push is not permission.
 
 ## Git contract
 
 - The remote is `origin` -> <https://github.com/DevTarlow/dsh-peak-price-pal.git>.
-- Never commit secrets, `node_modules/`, logs, or `.DS_Store`.
+
+| Action | Who | When |
+| --- | --- | --- |
+| `git commit` | the agent, unprompted | as soon as a task is complete and verified |
+| `git push` | only when the human explicitly says so | on an unambiguous instruction such as "push", "push it", or "push that" |
+
+- Never push on your own initiative. A green suite, a clean diff, a finished task, or a previous push is not permission.
 - Never rewrite published history.
+- One task, one commit. Keep unrelated fixes out; an unrelated fix gets its own commit.
+- A question or analysis with no file changes needs no commit. A red suite does not get committed; report the failure instead.
+- Never commit secrets, `node_modules/`, logs, or `.DS_Store`.
 - Before a push, run `npm test` and confirm `git status --short` is clean.
