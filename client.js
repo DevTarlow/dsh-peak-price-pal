@@ -42,6 +42,114 @@ window.__ModuleLoader__.load({
     /** Upper bound on the day scan; comfortably above the longest Chinese holiday stretch. */
     const MAX_SCAN_DAYS = 62
 
+    /** Browser-local display preferences and their versioned storage key. */
+    const SETTINGS_KEY = 'dsh-peak-price-pal.settings.v1'
+    const ICON_CHOICES = new Set(['sunMoon', 'dot'])
+    const CLOCK_CHOICES = new Set(['24h', '12h'])
+    const DETAIL_CHOICES = new Set(['all', 'minimal'])
+    const DEFAULT_SETTINGS = Object.freeze({ icon: 'sunMoon', clock: '24h', detail: 'all' })
+
+    /**
+     * Validate one settings value against the supported choices.
+     * @param {unknown} value - Parsed settings or a partial patch.
+     * @returns {{ icon: 'sunMoon' | 'dot', clock: '24h' | '12h', detail: 'all' | 'minimal' }} A complete, frozen settings object.
+     */
+    function normalizeSettings(value) {
+      const source = value !== null && typeof value === 'object' ? value : {}
+      return Object.freeze({
+        icon: ICON_CHOICES.has(source.icon) ? source.icon : DEFAULT_SETTINGS.icon,
+        clock: CLOCK_CHOICES.has(source.clock) ? source.clock : DEFAULT_SETTINGS.clock,
+        detail: DETAIL_CHOICES.has(source.detail) ? source.detail : DEFAULT_SETTINGS.detail,
+      })
+    }
+
+    /**
+     * Read the browser-local settings, falling back to defaults on bad JSON or blocked storage.
+     * @returns {{ icon: 'sunMoon' | 'dot', clock: '24h' | '12h', detail: 'all' | 'minimal' }} The stored or default settings.
+     */
+    function readSettings() {
+      try {
+        const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(SETTINGS_KEY)
+        if (raw === null) return normalizeSettings(DEFAULT_SETTINGS)
+        return normalizeSettings(JSON.parse(raw))
+      } catch {
+        return normalizeSettings(DEFAULT_SETTINGS)
+      }
+    }
+
+    /**
+     * Persist the settings. A blocked or full storage keeps the in-memory value only.
+     * @param {{ icon: string, clock: string, detail: string }} settings - Settings to write.
+     */
+    function writeSettings(settings) {
+      try {
+        if (typeof localStorage !== 'undefined') localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
+      } catch {
+        // The settings still apply for this page; they just will not survive a reload.
+      }
+    }
+
+    /**
+     * Compare two complete settings objects.
+     * @param {{ icon: string, clock: string, detail: string }} left - First settings.
+     * @param {{ icon: string, clock: string, detail: string }} right - Second settings.
+     * @returns {boolean} True when every value matches.
+     */
+    function sameSettings(left, right) {
+      return left.icon === right.icon && left.clock === right.clock && left.detail === right.detail
+    }
+
+    /** Current settings snapshot and its subscribers. */
+    let currentSettings = readSettings()
+    const settingsListeners = new Set()
+
+    /** @returns {{ icon: 'sunMoon' | 'dot', clock: '24h' | '12h', detail: 'all' | 'minimal' }} The current settings. */
+    function settingsSnapshot() {
+      return currentSettings
+    }
+
+    /**
+     * Subscribe to settings changes.
+     * @param {() => void} listener - Called after each accepted change.
+     * @returns {() => void} Unsubscribe.
+     */
+    function subscribeSettings(listener) {
+      settingsListeners.add(listener)
+      return () => settingsListeners.delete(listener)
+    }
+
+    /**
+     * Replace the current settings when the values differ from the snapshot.
+     * @param {{ icon: string, clock: string, detail: string }} next - Complete settings.
+     */
+    function publishSettings(next) {
+      if (sameSettings(currentSettings, next)) return
+      currentSettings = next
+      for (const listener of [...settingsListeners]) listener()
+    }
+
+    /**
+     * Merge a patch into the current settings, persist, and notify.
+     * @param {{ icon?: string, clock?: string, detail?: string }} patch - Values to change.
+     * @returns {{ icon: 'sunMoon' | 'dot', clock: '24h' | '12h', detail: 'all' | 'minimal' }} The normalized settings.
+     */
+    function updateSettings(patch) {
+      const next = normalizeSettings({ ...currentSettings, ...patch })
+      writeSettings(next)
+      publishSettings(next)
+      return next
+    }
+
+    /** Restore and persist the defaults. */
+    function resetSettings() {
+      updateSettings(DEFAULT_SETTINGS)
+    }
+
+    /** Re-read storage, for a `storage` event from another tab. */
+    function reloadSettings() {
+      publishSettings(readSettings())
+    }
+
     /** Chinese public holidays, off-days only. Sources are the State Council notices. */
     const HOLIDAY_SCHEDULE = {
       2026: {
@@ -83,6 +191,25 @@ window.__ModuleLoader__.load({
      */
     function pad2(value) {
       return String(value).padStart(2, '0')
+    }
+
+    /**
+     * Format a wall-clock hour and minute in the selected clock style.
+     * @param {number} hour - 0-23.
+     * @param {number} minute - 0-59.
+     * @param {'24h' | '12h'} clock - Selected clock style.
+     * @param {(key: string, vars?: Record<string, unknown>) => string} t - Translate seat.
+     * @returns {string} `09:00` or `9:00 AM` / `上午 9:00`.
+     */
+    function formatClock(hour, minute, clock, t) {
+      if (clock === '12h') {
+        const hour12 = hour % 12 === 0 ? 12 : hour % 12
+        return t('clock.time12', {
+          time: `${hour12}:${pad2(minute)}`,
+          period: t(hour < 12 ? 'clock.am' : 'clock.pm'),
+        })
+      }
+      return `${pad2(hour)}:${pad2(minute)}`
     }
 
     /**
@@ -264,23 +391,25 @@ window.__ModuleLoader__.load({
      * A Beijing timestamp for the hover text.
      * @param {number} ms - Epoch milliseconds.
      * @param {(key: string, vars?: Record<string, unknown>) => string} t - Translate seat.
-     * @returns {string} Weekday, date, and 24-hour clock in Beijing.
+     * @param {'24h' | '12h'} [clock] - Selected clock style.
+     * @returns {string} Weekday, date, and clock in Beijing.
      */
-    function beijingStamp(ms, t) {
+    function beijingStamp(ms, t, clock = '24h') {
       const parts = beijingParts(ms)
-      return `${t(`weekday.${parts.weekday}`)} ${parts.dateKey} ${pad2(parts.hour)}:${pad2(parts.minute)}`
+      return `${t(`weekday.${parts.weekday}`)} ${parts.dateKey} ${formatClock(parts.hour, parts.minute, clock, t)}`
     }
 
     /**
      * A timestamp in the browser's local zone for the hover text.
      * @param {number} ms - Epoch milliseconds.
      * @param {(key: string, vars?: Record<string, unknown>) => string} t - Translate seat.
-     * @returns {string} Weekday, date, and 24-hour clock locally.
+     * @param {'24h' | '12h'} [clock] - Selected clock style.
+     * @returns {string} Weekday, date, and clock locally.
      */
-    function localStamp(ms, t) {
+    function localStamp(ms, t, clock = '24h') {
       const date = new Date(ms)
       const dateKey = `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
-      return `${t(`weekday.${date.getDay()}`)} ${dateKey} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+      return `${t(`weekday.${date.getDay()}`)} ${dateKey} ${formatClock(date.getHours(), date.getMinutes(), clock, t)}`
     }
 
     /**
@@ -370,6 +499,10 @@ window.__ModuleLoader__.load({
       'tip.next': 'Next: {period} in {countdown} ({beijing} Beijing)',
       'tip.nextLocal': ' · {local} your time',
       'tip.rule': 'Peak: Monday to Friday 09:00-12:00 and 14:00-18:00 Beijing time, excluding Chinese public holidays.',
+      'tip.rule12': 'Peak: Monday to Friday 9:00 AM-12:00 PM and 2:00 PM-6:00 PM Beijing time, excluding Chinese public holidays.',
+      'clock.time12': '{time} {period}',
+      'clock.am': 'AM',
+      'clock.pm': 'PM',
       'tip.today': 'Today in Beijing: {status}',
       'tip.calendarMissing': 'The Chinese holiday calendar for {years} is not bundled; using the weekday rule.',
       'tip.model': 'DeepSeek route: {route}',
@@ -401,6 +534,23 @@ window.__ModuleLoader__.load({
       'weekday.4': 'Thu',
       'weekday.5': 'Fri',
       'weekday.6': 'Sat',
+      'settings.tab': 'Peak Price Pal',
+      'settings.title': 'Logo settings',
+      'settings.description': 'Choose the icon, the clock, and how much the hover card shows.',
+      'settings.icon': 'Icon',
+      'settings.icon.sunMoon': 'Sun and moon',
+      'settings.icon.dot': 'Dot',
+      'settings.icon.help': 'The dot is a plain state-colored circle.',
+      'settings.clock': 'Clock',
+      'settings.clock.24': '24-hour',
+      'settings.clock.12': '12-hour',
+      'settings.clock.help': 'Applies to the times in the hover card.',
+      'settings.details': 'Details',
+      'settings.details.all': 'All details',
+      'settings.details.minimal': 'Minimal',
+      'settings.details.help': 'Minimal keeps the state and the next switch.',
+      'settings.reset': 'Reset to defaults',
+      'settings.saved': 'Saved in this browser.',
     }
 
     /** Chinese UI and hover strings. */
@@ -413,6 +563,10 @@ window.__ModuleLoader__.load({
       'tip.next': '下次切换：{period}，还有 {countdown}（北京时间 {beijing}）',
       'tip.nextLocal': ' · 本地 {local}',
       'tip.rule': '高峰：北京时间周一至周五 09:00-12:00、14:00-18:00，中国法定节假日除外。',
+      'tip.rule12': '高峰：北京时间周一至周五上午 9:00-中午 12:00、下午 2:00-6:00，中国法定节假日除外。',
+      'clock.time12': '{period} {time}',
+      'clock.am': '上午',
+      'clock.pm': '下午',
       'tip.today': '北京今天：{status}',
       'tip.calendarMissing': '{years} 年中国法定节假日表尚未内置，暂按周一至周五规则判断。',
       'tip.model': 'DeepSeek 路由：{route}',
@@ -444,6 +598,23 @@ window.__ModuleLoader__.load({
       'weekday.4': '周四',
       'weekday.5': '周五',
       'weekday.6': '周六',
+      'settings.tab': '峰谷小助手',
+      'settings.title': '徽标设置',
+      'settings.description': '选择图标、时钟格式，以及悬停卡显示多少内容。',
+      'settings.icon': '图标',
+      'settings.icon.sunMoon': '太阳和月亮',
+      'settings.icon.dot': '圆点',
+      'settings.icon.help': '圆点是纯状态色的圆点。',
+      'settings.clock': '时钟',
+      'settings.clock.24': '24 小时',
+      'settings.clock.12': '12 小时',
+      'settings.clock.help': '用于悬停卡中的时间。',
+      'settings.details': '详情',
+      'settings.details.all': '全部详情',
+      'settings.details.minimal': '精简',
+      'settings.details.help': '精简模式只保留当前时段和下次切换。',
+      'settings.reset': '恢复默认',
+      'settings.saved': '设置保存在此浏览器。',
     }
 
     /**
@@ -513,6 +684,26 @@ window.__ModuleLoader__.load({
 @position-try --ppp-card-start{left:12px;right:auto;transform:none}
 @position-try --ppp-card-top{top:12px;bottom:auto;left:12px;right:12px;width:auto;max-width:none;transform:none;max-height:calc(100dvh - 24px);overflow-y:auto}
 @media (prefers-reduced-motion:reduce){.ppp{transition:none}.ppp_card{animation:none}}
+.ppp_settings{display:flex;flex-direction:column;max-width:620px;padding:4px 0 24px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}
+.ppp_settingsTitle{margin:0;font-size:15px;line-height:22px;font-weight:600}
+.ppp_settingsLead{margin:2px 0 8px;color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px}
+.ppp_settingRow{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px 24px;padding:12px 0;border-top:.5px solid var(--dsw-alias-border-l2)}
+.ppp_settingCopy{display:flex;flex-direction:column;gap:2px;min-width:0}
+.ppp_settingLabel{font-size:13px;line-height:20px;font-weight:500}
+.ppp_settingHelp{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}
+.ppp_choices{display:inline-flex;flex:none;gap:2px;padding:2px;border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-layer-2)}
+.ppp_choice{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:26px;padding:2px 9px;border:1px solid transparent;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:pointer;white-space:nowrap}
+.ppp_choice:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.ppp_choiceActive{background:var(--dsw-alias-bg-layer-1);border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);font-weight:500}
+.ppp_choice:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
+.ppp_choiceGlyphs{display:inline-flex;align-items:center;gap:1px;line-height:0}
+.ppp_choiceGlyphs svg{display:block;width:14px;height:14px;pointer-events:none}
+.ppp_previewPeak{display:inline-flex;color:var(--dsw-alias-state-warn-primary)}
+.ppp_previewValley{display:inline-flex;color:var(--dsw-alias-state-success-primary)}
+.ppp_reset{margin-top:16px;align-self:flex-start;padding:4px 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:pointer}
+.ppp_reset:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.ppp_reset:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
+.ppp_saved{margin:10px 0 0;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 `.trim()
 
     /** A sun glyph for the peak window. */
@@ -567,6 +758,17 @@ window.__ModuleLoader__.load({
       h('circle', { cx: 8, cy: 8, r: 6.2, fill: 'currentColor', mask: `url(#${maskId})` }))
     }
 
+    /** A plain state-colored dot, for the compact icon choice. */
+    function DotGlyph() {
+      return h('svg', {
+        viewBox: '0 0 16 16',
+        width: 16,
+        height: 16,
+        'aria-hidden': true,
+        focusable: 'false',
+      }, h('circle', { cx: 8, cy: 8, r: 4.6, fill: 'currentColor' }))
+    }
+
     /**
      * Subscribe to the model directory store without breaking React's snapshot contract.
      * @param {object | null} store - `modelDirectories` store.
@@ -597,6 +799,11 @@ window.__ModuleLoader__.load({
       return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
     }
 
+    /** Subscribe to the browser-local display settings. */
+    function useSettings() {
+      return useSyncExternalStore(subscribeSettings, settingsSnapshot, settingsSnapshot)
+    }
+
     /** A quarter-minute clock: the countdown is minute-resolution, and model switches arrive through the store subscription. */
     function useNow() {
       const [now, setNow] = useState(() => Date.now())
@@ -608,50 +815,56 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Build the logo state and the full hover text.
+     * Build the logo state and the hover card content.
      * @param {number} ms - Epoch milliseconds.
      * @param {(key: string, vars?: Record<string, unknown>) => string} t - Translate seat.
      * @param {{ provider: string, model: string }} route - DeepSeek route.
+     * @param {{ icon: string, clock: '24h' | '12h', detail: 'all' | 'minimal' }} [settings] - Display preferences.
      * @returns {{ peak: boolean, tooltip: string, lines: { text: string, tone: 'peak' | 'offPeak' | null }[][] }} View model.
      */
-    function describe(ms, t, route) {
+    function describe(ms, t, route, settings = DEFAULT_SETTINGS) {
       const peak = isPeak(ms)
       const next = nextSwitch(ms)
-      const nowBeijing = beijingStamp(ms, t)
-      const nowLocal = localStamp(ms, t)
-      const lines = [
-        peak ? t('tip.peak') : t('tip.offPeak'),
-        t('tip.beijing', { stamp: nowBeijing }),
-      ]
-      if (nowLocal !== nowBeijing) {
-        lines.push(t('tip.local', {
-          stamp: nowLocal,
-          zone: localZoneName() || t('tip.localZoneUnknown'),
-        }))
-      }
+      const clock = settings.clock
+      const nowBeijing = beijingStamp(ms, t, clock)
+      const nowLocal = localStamp(ms, t, clock)
+      const stateLine = peak ? t('tip.peak') : t('tip.offPeak')
+      let nextLine = null
       if (next !== null) {
         const period = next.peak ? t('period.peak') : t('period.offPeak')
         const countdown = durationText(next.at - ms, t)
-        const nextBeijing = beijingStamp(next.at, t)
-        let line = t('tip.next', { period, countdown, beijing: nextBeijing })
-        const nextLocal = localStamp(next.at, t)
-        if (nextLocal !== nextBeijing) line += t('tip.nextLocal', { local: nextLocal })
-        lines.push(line)
+        const nextBeijing = beijingStamp(next.at, t, clock)
+        nextLine = t('tip.next', { period, countdown, beijing: nextBeijing })
+        const nextLocal = localStamp(next.at, t, clock)
+        if (nextLocal !== nextBeijing) nextLine += t('tip.nextLocal', { local: nextLocal })
       }
-      lines.push(t('tip.rule'))
-      lines.push(t('tip.today', { status: todayStatus(ms, t) }))
-      const parts = beijingParts(ms)
-      const missingYears = new Set()
-      if (HOLIDAY_SCHEDULE[parts.year] === undefined) missingYears.add(parts.year)
-      if (next !== null) {
-        const nextParts = beijingParts(next.at)
-        if (HOLIDAY_SCHEDULE[nextParts.year] === undefined) missingYears.add(nextParts.year)
+      const lines = [stateLine]
+      if (settings.detail === 'minimal') {
+        if (nextLine !== null) lines.push(nextLine)
+      } else {
+        lines.push(t('tip.beijing', { stamp: nowBeijing }))
+        if (nowLocal !== nowBeijing) {
+          lines.push(t('tip.local', {
+            stamp: nowLocal,
+            zone: localZoneName() || t('tip.localZoneUnknown'),
+          }))
+        }
+        if (nextLine !== null) lines.push(nextLine)
+        lines.push(t(clock === '12h' ? 'tip.rule12' : 'tip.rule'))
+        lines.push(t('tip.today', { status: todayStatus(ms, t) }))
+        const parts = beijingParts(ms)
+        const missingYears = new Set()
+        if (HOLIDAY_SCHEDULE[parts.year] === undefined) missingYears.add(parts.year)
+        if (next !== null) {
+          const nextParts = beijingParts(next.at)
+          if (HOLIDAY_SCHEDULE[nextParts.year] === undefined) missingYears.add(nextParts.year)
+        }
+        if (missingYears.size > 0) {
+          lines.push(t('tip.calendarMissing', { years: [...missingYears].join(', ') }))
+        }
+        const routeText = route.model === '' ? route.provider : `${route.provider} / ${route.model}`
+        lines.push(t('tip.model', { route: routeText }))
       }
-      if (missingYears.size > 0) {
-        lines.push(t('tip.calendarMissing', { years: [...missingYears].join(', ') }))
-      }
-      const routeText = route.model === '' ? route.provider : `${route.provider} / ${route.model}`
-      lines.push(t('tip.model', { route: routeText }))
       const highlightTerms = [
         { word: t('word.offPeak'), tone: 'offPeak' },
         { word: t('word.peak'), tone: 'peak' },
@@ -665,8 +878,9 @@ window.__ModuleLoader__.load({
 
     /** The live logo, mounted only while the route is DeepSeek. */
     function PeakPricePalLive({ route, t }) {
+      const settings = useSettings()
       const now = useNow()
-      const view = useMemo(() => describe(now, t, route), [now, t, route])
+      const view = useMemo(() => describe(now, t, route, settings), [now, t, route, settings])
       const [hovered, setHovered] = useState(false)
       const [focused, setFocused] = useState(false)
       const closeTimer = useRef(null)
@@ -732,7 +946,7 @@ window.__ModuleLoader__.load({
             if (event.key === 'Escape') event.currentTarget.blur()
           },
         },
-        h(view.peak ? SunGlyph : MoonGlyph),
+        settings.icon === 'dot' ? h(DotGlyph) : h(view.peak ? SunGlyph : MoonGlyph),
         h('span', { className: 'ppp_sr', id: descriptionId }, view.tooltip)),
         card)
     }
@@ -763,7 +977,74 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Register the locale dictionaries and the composer dock entry.
+     * One segmented choice group for the settings page.
+     * @param {{ label: string, value: string, options: { value: string, label: string, preview?: unknown }[], onChange: (value: string) => void }} props - Group props.
+     */
+    function ChoiceGroup({ label, value, options, onChange }) {
+      return h('div', { className: 'ppp_choices', role: 'group', 'aria-label': label },
+        ...options.map(option => h('button', {
+          key: option.value,
+          type: 'button',
+          className: option.value === value ? 'ppp_choice ppp_choiceActive' : 'ppp_choice',
+          'aria-pressed': option.value === value,
+          onClick: () => onChange(option.value),
+        }, option.preview ?? null, option.label)))
+    }
+
+    /**
+     * The Plugins settings page. Display choices are browser-local and apply live.
+     * @param {{ t: (key: string, vars?: Record<string, unknown>) => string }} props - Slot locale seat.
+     */
+    function SettingsPage({ t }) {
+      const settings = useSettings()
+      const sunMoonPreview = h('span', { className: 'ppp_choiceGlyphs', 'aria-hidden': 'true' },
+        h('span', { className: 'ppp_previewPeak' }, h(SunGlyph)),
+        h('span', { className: 'ppp_previewValley' }, h(MoonGlyph)))
+      const dotPreview = h('span', { className: 'ppp_choiceGlyphs', 'aria-hidden': 'true' },
+        h('span', { className: 'ppp_previewPeak' }, h(DotGlyph)),
+        h('span', { className: 'ppp_previewValley' }, h(DotGlyph)))
+      const row = (label, help, control) => h('div', { className: 'ppp_settingRow' },
+        h('div', { className: 'ppp_settingCopy' },
+          h('span', { className: 'ppp_settingLabel' }, label),
+          h('span', { className: 'ppp_settingHelp' }, help)),
+        control)
+      return h('div', { className: 'ppp_settings' },
+        h('style', { key: 'ppp-style' }, CSS),
+        h('h2', { className: 'ppp_settingsTitle' }, t('settings.title')),
+        h('p', { className: 'ppp_settingsLead' }, t('settings.description')),
+        row(t('settings.icon'), t('settings.icon.help'), h(ChoiceGroup, {
+          label: t('settings.icon'),
+          value: settings.icon,
+          onChange: icon => updateSettings({ icon }),
+          options: [
+            { value: 'sunMoon', label: t('settings.icon.sunMoon'), preview: sunMoonPreview },
+            { value: 'dot', label: t('settings.icon.dot'), preview: dotPreview },
+          ],
+        })),
+        row(t('settings.clock'), t('settings.clock.help'), h(ChoiceGroup, {
+          label: t('settings.clock'),
+          value: settings.clock,
+          onChange: clock => updateSettings({ clock }),
+          options: [
+            { value: '24h', label: t('settings.clock.24') },
+            { value: '12h', label: t('settings.clock.12') },
+          ],
+        })),
+        row(t('settings.details'), t('settings.details.help'), h(ChoiceGroup, {
+          label: t('settings.details'),
+          value: settings.detail,
+          onChange: detail => updateSettings({ detail }),
+          options: [
+            { value: 'all', label: t('settings.details.all') },
+            { value: 'minimal', label: t('settings.details.minimal') },
+          ],
+        })),
+        h('button', { type: 'button', className: 'ppp_reset', onClick: () => resetSettings() }, t('settings.reset')),
+        h('p', { className: 'ppp_saved' }, t('settings.saved')))
+    }
+
+    /**
+     * Register the locale dictionaries, the composer dock entry, and the settings tab.
      * @param {object} ctx - Client context carrying `locale` and `slots`.
      */
     function apply(ctx) {
@@ -779,6 +1060,22 @@ window.__ModuleLoader__.load({
           fallbackT,
         }),
       }, PeakPricePal))
+      ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
+        name: 'settings.plugins.tab',
+        id: SLOT_ID,
+        order: 100,
+        locale: NS,
+        label: () => fallbackT('settings.tab'),
+      }, SettingsPage))
+      ctx.effect(() => {
+        if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return () => {}
+        const onStorage = event => {
+          if (event.key !== null && event.key !== SETTINGS_KEY) return
+          reloadSettings()
+        }
+        window.addEventListener('storage', onStorage)
+        return () => window.removeEventListener('storage', onStorage)
+      }, `${NS}: settings storage`)
     }
 
     const plugin = { inject: ['slots', 'locale'], apply }
@@ -810,7 +1107,23 @@ window.__ModuleLoader__.load({
         directoryStore,
         describe,
         highlightWords,
+        formatClock,
         translateFallback,
+        settings: {
+          key: SETTINGS_KEY,
+          defaults: DEFAULT_SETTINGS,
+          getSnapshot: settingsSnapshot,
+          subscribe: subscribeSettings,
+          update: updateSettings,
+          reset: resetSettings,
+          reload: reloadSettings,
+          normalize: normalizeSettings,
+          read: readSettings,
+          write: writeSettings,
+        },
+        dotGlyph: DotGlyph,
+        settingsPage: SettingsPage,
+        choiceGroup: ChoiceGroup,
         holidayFor,
         holidayYears: Object.keys(HOLIDAY_SCHEDULE).map(Number),
         holidayCount: HOLIDAY_INDEX.size,

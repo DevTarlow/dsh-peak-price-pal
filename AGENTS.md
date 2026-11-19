@@ -6,7 +6,7 @@ A DeepSeek Harness plugin. The visible half is `client.js`: a 20px sun or moon i
 
 ```
 index.js            the Harness row: apply() and nothing else
-client.js           the browser half: time math, holiday table, model gate, logo, hover card
+client.js           the browser half: time math, holiday table, model gate, settings store and page, logo, hover card
 cordis.patch.yml    the bundle layer: one insert row
 locale/*.json       inventory title and description (en, zh)
 icon.svg            the plugin-list mark
@@ -20,10 +20,12 @@ test/               the Node harness
 2. **Peak is Monday to Friday, 09:00-12:00 and 14:00-18:00, excluding bundled Chinese holidays.** Starts are inclusive, ends are exclusive. Weekends are off-peak all day, including make-up working weekends.
 3. **Off-peak is half the peak rate.** The hover card says that; it does not quote per-model prices.
 4. **The gate is the provider id, not the model name.** `deepseek`, `deepseek-official`, and `deepseek-account` show. `openrouter` with a `deepseek/...` model stays hidden. Unknown routes stay hidden.
-5. **The logo is icon-only.** The hover/focus card is the detail surface, and it colors the peak and off-peak words with the state tokens. No click action, settings, storage, network, or Host route.
+5. **The logo is icon-only.** The hover/focus card is the detail surface, and it colors the peak and off-peak words with the state tokens. The card has no click action. Browser-local settings are the only storage; there is no network or Host route.
 6. **`order: 1` is required.** The slot wrapper uses `display: contents`, and the host renders `ContextMeter` as the last flex child with default `order: 0`. Removing the rule puts the logo to the left of the ring.
 7. **Theme tokens only, platform modules only.** No literal colors in the CSS and no Harness Client package imports. The factory requests `react` and `react-dom` and nothing else.
 8. **Holidays are bundled.** 2026 and 2027 only, off-days only. A later year falls back to the weekday rule and says so in the card.
+9. **Settings are browser-local, versioned, and live.** The `settings.plugins.tab` page writes the `dsh-peak-price-pal.settings.v1` store in `localStorage`; the logo and card read it through `useSyncExternalStore`. Unknown values fall back to defaults, and blocked storage keeps the in-memory choice for the page. Controls are custom and token-styled, never imported from a Harness Client package.
+10. **Display choices reach every surface.** The icon choice changes the logo glyph. The clock choice changes the current and next stamps and picks `tip.rule12`. Minimal detail keeps only the state line and the next-switch line, in the card and in the accessible description.
 
 ## Development loop
 

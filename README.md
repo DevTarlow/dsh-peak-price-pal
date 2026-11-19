@@ -27,7 +27,7 @@ The first image is the real hover card at 21:53 Pacific, seven minutes before th
 
 Hover the logo for the full picture. The card shows your local time, Beijing time, the next switch with a countdown, the peak rule, today's status in Beijing, and the provider and model behind the reading. The words peak and off-peak carry the same amber and green as the logo.
 
-There is no click action and no settings panel.
+There is no click action on the card. The settings live in the Plugins section.
 
 ## The billing window
 
@@ -83,13 +83,24 @@ For a local copy, paste the folder's full path instead. The install dialog accep
 
 ## Use
 
-The logo is the last item in the line under the input, past the context ring. It has no click action and no settings. Hover or focus it when you want the numbers. The card stays open while the pointer rests on it, so the text can be selected and copied.
+The logo is the last item in the line under the input, past the context ring. It has no click action. Hover or focus it when you want the numbers. The card stays open while the pointer rests on it, so the text can be selected and copied.
 
 Switch the model to an OpenRouter route and the logo disappears. Switch back to a DeepSeek route and it returns. And the change lands as soon as the session's model store changes.
 
+## Settings
+
+Open **Settings > Plugins > Peak Price Pal**.
+
+- **Icon**: the sun and moon, or a plain dot. The dot uses the same state color without a glyph.
+- **Clock**: 24-hour or 12-hour. It covers the current times, the next switch, and the rule line.
+- **Details**: all details, or minimal. Minimal keeps the current state and the next switch.
+- **Reset to defaults** returns to the sun and moon, 24-hour, and all details.
+
+Changes apply as soon as you pick them. The choices are saved in this browser, so another browser starts from the defaults.
+
 ## Privacy
 
-The plugin reads the current provider and model from the page and keeps the value in memory. It sends nothing, stores nothing, and makes no network request. Your session text and token counts are never read.
+The plugin reads the current provider and model from the page and keeps the value in memory. It stores your three display preferences in this browser's local storage. It sends nothing and makes no network request. Your session text and token counts are never read.
 
 ## Limits
 
@@ -97,6 +108,7 @@ The plugin reads the current provider and model from the page and keeps the valu
 - The logo shows the window, not your bill. It does not estimate spend.
 - Prices can change. The table has the date it was checked.
 - The holiday calendar covers 2026 and 2027. Later years need an update.
+- The settings are per browser. They do not sync across browsers or devices.
 - A session with no readable model route shows no logo.
 - Subagent sessions show no logo.
 
@@ -118,4 +130,4 @@ The repository has no build step and no runtime dependencies.
 npm test
 ```
 
-The test file starts the browser module in Node with small React and react-dom stubs, then checks the time math, the holiday table, the model gate, the manifest, the locale keys, the icon, and the slot registration. Edit `client.js` and refresh the page to see the change. Edit `index.js`, `package.json`, or `cordis.patch.yml` and restart the Harness.
+The test file starts the browser module in Node with small React, react-dom, and storage stubs, then checks the time math, the holiday table, the model gate, the settings store, the manifest, the locale keys, the icons, and the slot registrations. Edit `client.js` and refresh the page to see the change. Edit `index.js`, `package.json`, or `cordis.patch.yml` and restart the Harness.

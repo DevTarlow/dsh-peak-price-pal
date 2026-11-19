@@ -5,7 +5,7 @@
  * time math, the holiday table, the model gate, the manifest, the locale keys,
  * the icon rules, and the slot registration. No build step, no dependencies.
  */
-import test from 'node:test'
+import test, { beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -13,6 +13,17 @@ import { dirname, join } from 'node:path'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
+
+/** Minimal browser storage so the settings store has a real persistent surface. */
+const settingsStorage = new Map()
+globalThis.localStorage = {
+  getItem: key => (settingsStorage.has(key) ? settingsStorage.get(key) : null),
+  setItem: (key, value) => { settingsStorage.set(key, String(value)) },
+  removeItem: key => { settingsStorage.delete(key) },
+}
+
+/** Captured window listeners, used by the cross-tab storage sync. */
+const windowListeners = []
 
 /** Minimal React surface used by the module under test. */
 const React = {
@@ -39,6 +50,11 @@ globalThis.window = {
       moduleDefinition = definition
     },
   },
+  addEventListener: (type, listener) => { windowListeners.push({ type, listener }) },
+  removeEventListener: (type, listener) => {
+    const index = windowListeners.findIndex(entry => entry.type === type && entry.listener === listener)
+    if (index >= 0) windowListeners.splice(index, 1)
+  },
 }
 
 await import(new URL('../client.js', import.meta.url).href)
@@ -50,6 +66,10 @@ const plugin = moduleDefinition.factory(name => {
 })
 const api = plugin.__peakPricePal
 assert.ok(api, 'the module exposes its test face')
+
+beforeEach(() => {
+  api.settings.reset()
+})
 
 const t = (key, vars) => api.translateFallback(key, vars)
 const at = (date, time) => Date.parse(`${date}T${time}:00+08:00`)
@@ -142,6 +162,113 @@ test('the countdown uses the active locale in Chinese', () => {
   assert.equal(api.durationText(60_000, zhT), '1 分钟')
   assert.equal(api.durationText(3_660_000, zhT), '1 小时 1 分')
   assert.equal(api.durationText(90_000_000, zhT), '1 天 1 小时')
+})
+
+test('settings default to the current behavior and reject unknown values', () => {
+  assert.deepEqual(api.settings.normalize(undefined), api.settings.defaults)
+  assert.deepEqual(api.settings.normalize({ icon: 'dot', clock: '12h', detail: 'minimal' }), {
+    icon: 'dot', clock: '12h', detail: 'minimal',
+  })
+  assert.deepEqual(api.settings.normalize({ icon: 'nope', clock: 'nope', detail: 'nope' }), api.settings.defaults)
+  assert.deepEqual(api.settings.normalize({ icon: 'dot', extra: true }), {
+    ...api.settings.defaults, icon: 'dot',
+  })
+})
+
+test('settings persist and notify subscribers', () => {
+  const seen = []
+  const unsubscribe = api.settings.subscribe(() => seen.push(api.settings.getSnapshot()))
+  api.settings.update({ icon: 'dot' })
+  assert.equal(api.settings.getSnapshot().icon, 'dot')
+  assert.equal(seen.length, 1)
+  assert.equal(JSON.parse(settingsStorage.get(api.settings.key)).icon, 'dot')
+  api.settings.update({ icon: 'dot' })
+  assert.equal(seen.length, 1)
+  api.settings.reset()
+  assert.deepEqual(api.settings.getSnapshot(), api.settings.defaults)
+  assert.equal(seen.length, 2)
+  unsubscribe()
+})
+
+test('settings read tolerates bad JSON and blocked storage', () => {
+  settingsStorage.set(api.settings.key, JSON.stringify({ icon: 'dot', clock: '12h', detail: 'minimal' }))
+  assert.deepEqual(api.settings.read(), { icon: 'dot', clock: '12h', detail: 'minimal' })
+  settingsStorage.set(api.settings.key, '{bad json')
+  assert.deepEqual(api.settings.read(), api.settings.defaults)
+  const original = globalThis.localStorage
+  try {
+    globalThis.localStorage = {
+      getItem: () => { throw new Error('blocked') },
+      setItem: () => { throw new Error('blocked') },
+    }
+    assert.deepEqual(api.settings.read(), api.settings.defaults)
+    assert.doesNotThrow(() => api.settings.write(api.settings.defaults))
+  } finally {
+    globalThis.localStorage = original
+  }
+})
+
+test('the clock formatter handles 24-hour and 12-hour in both locales', () => {
+  assert.equal(api.formatClock(9, 5, '24h', t), '09:05')
+  assert.equal(api.formatClock(14, 0, '24h', t), '14:00')
+  assert.equal(api.formatClock(9, 5, '12h', t), '9:05 AM')
+  assert.equal(api.formatClock(0, 30, '12h', t), '12:30 AM')
+  assert.equal(api.formatClock(12, 0, '12h', t), '12:00 PM')
+  assert.equal(api.formatClock(14, 0, '12h', t), '2:00 PM')
+  const zhT = (key, vars) => api.ZH[key].replace(/\{(\w+)\}/g, (_, name) => String(vars[name]))
+  assert.equal(api.formatClock(9, 5, '12h', zhT), '上午 9:05')
+  assert.equal(api.formatClock(14, 5, '12h', zhT), '下午 2:05')
+})
+
+test('the 12-hour setting reaches the timestamps and the rule', () => {
+  const view = api.describe(at('2026-11-19', '13:08'), t, {
+    provider: 'deepseek-official',
+    model: 'deepseek-flash',
+  }, { icon: 'sunMoon', clock: '12h', detail: 'all' })
+  assert.match(view.tooltip, /Beijing: Thu 2026-11-19 1:08 PM/)
+  assert.match(view.tooltip, /Peak: Monday to Friday 9:00 AM-12:00 PM and 2:00 PM-6:00 PM/)
+  assert.match(view.tooltip, /Next: peak in .*Thu 2026-11-19 2:00 PM Beijing/)
+})
+
+test('minimal details keep only the state and the next switch', () => {
+  const view = api.describe(at('2026-11-19', '13:08'), t, {
+    provider: 'deepseek-official',
+    model: 'deepseek-flash',
+  }, { icon: 'sunMoon', clock: '24h', detail: 'minimal' })
+  assert.equal(view.lines.length, 2)
+  assert.match(view.tooltip, /^Off-peak rate/)
+  assert.match(view.tooltip, /\nNext: peak in/)
+  assert.equal(view.tooltip.includes('Beijing:'), false)
+  assert.equal(view.tooltip.includes('Peak: Monday'), false)
+  assert.equal(view.tooltip.includes('DeepSeek route'), false)
+})
+
+test('the settings choice group updates through its callback', () => {
+  const changes = []
+  const group = api.choiceGroup({
+    label: 'Icon',
+    value: 'sunMoon',
+    onChange: value => changes.push(value),
+    options: [
+      { value: 'sunMoon', label: 'Sun and moon' },
+      { value: 'dot', label: 'Dot' },
+    ],
+  })
+  assert.equal(group.props.role, 'group')
+  assert.equal(group.props['aria-label'], 'Icon')
+  assert.equal(group.children.length, 2)
+  assert.equal(group.children[1].props['aria-pressed'], false)
+  group.children[1].props.onClick()
+  assert.deepEqual(changes, ['dot'])
+})
+
+test('the settings page renders the three preference rows', () => {
+  const page = api.settingsPage({ t })
+  assert.equal(page.props.className, 'ppp_settings')
+  assert.ok(page.children.some(child => child.type === 'h2' && child.children[0] === 'Logo settings'))
+  const rows = page.children.filter(child => child.type === 'div' && child.props.className === 'ppp_settingRow')
+  assert.equal(rows.length, 3)
+  assert.ok(page.children.some(child => child.type === 'button' && child.props.className === 'ppp_reset'))
 })
 
 test('the provider gate is DeepSeek-only', () => {
@@ -310,7 +437,7 @@ test('the English and Chinese dictionaries stay in step', () => {
 test('the manifest, patch, locale, and display files are complete', () => {
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   assert.equal(manifest.name, 'dsh-peak-price-pal')
-  assert.equal(manifest.version, '0.2.0')
+  assert.equal(manifest.version, '0.3.0')
   assert.equal(manifest.license, 'MIT')
   assert.equal(manifest.dsh.bundle.patch, './cordis.patch.yml')
   assert.equal(manifest.dsh.client.platform, 'web')
@@ -368,10 +495,15 @@ test('the client keeps the no-dependency contract and the CSS order', () => {
   assert.ok(api.CSS.includes('@position-try --ppp-card-end'))
   assert.ok(api.CSS.includes('anchor(top)'))
   assert.ok(api.CSS.includes(':focus-visible'))
+  assert.ok(api.CSS.includes('.ppp_settings{'))
+  assert.ok(api.CSS.includes('.ppp_settingRow{'))
+  assert.ok(api.CSS.includes('.ppp_choice{'))
+  assert.ok(api.CSS.includes('--dsw-alias-bg-layer-2'))
 })
 
-test('apply registers the dock entry and resolves the model store', () => {
+test('apply registers the dock entry and the settings tab', () => {
   const registrations = []
+  const injectedSlots = []
   const ctx = {
     effect(callback) {
       const dispose = callback()
@@ -384,7 +516,7 @@ test('apply registers the dock entry and resolves the model store', () => {
     get: name => (name === 'modelDirectories' ? { directoryFor: () => ({ store: fakeStore }) } : undefined),
     slots: {
       inject(slot, callback) {
-        assert.equal(slot, 'conversation.composer.dock')
+        injectedSlots.push(slot)
         callback()
       },
       register(options, component) {
@@ -395,16 +527,23 @@ test('apply registers the dock entry and resolves the model store', () => {
   }
   assert.deepEqual(plugin.inject, ['slots', 'locale'])
   plugin.apply(ctx)
-  assert.equal(registrations.length, 1)
-  const { options, component } = registrations[0]
-  assert.equal(options.name, 'conversation.composer.dock')
-  assert.equal(options.id, 'peak-price-pal')
-  assert.equal(options.order, 30)
-  assert.equal(options.locale, 'peak-price-pal')
-  assert.equal(component, api.component)
-  const face = options.inject('session-1')
+  assert.deepEqual(injectedSlots, ['conversation.composer.dock', 'settings.plugins.tab'])
+  assert.equal(registrations.length, 2)
+  const dock = registrations.find(entry => entry.options.name === 'conversation.composer.dock')
+  assert.equal(dock.options.id, 'peak-price-pal')
+  assert.equal(dock.options.order, 30)
+  assert.equal(dock.options.locale, 'peak-price-pal')
+  assert.equal(dock.component, api.component)
+  const face = dock.options.inject('session-1')
   assert.equal(face.modelStore, fakeStore)
   assert.equal(typeof face.fallbackT, 'function')
+  const tab = registrations.find(entry => entry.options.name === 'settings.plugins.tab')
+  assert.equal(tab.options.id, 'peak-price-pal')
+  assert.equal(tab.options.order, 100)
+  assert.equal(tab.options.locale, 'peak-price-pal')
+  assert.equal(tab.component, api.settingsPage)
+  assert.equal(tab.options.label(), 'Peak Price Pal')
+  assert.equal(windowListeners.filter(entry => entry.type === 'storage').length, 1)
 })
 
 test('the component hides on a third-party route and on a subagent', () => {
@@ -458,4 +597,30 @@ test('the live logo is focusable and exposes the full description', () => {
   assert.equal(hidden.props.id, 'ppp-desc-r0')
   assert.match(hidden.children.join(' '), /DeepSeek route: deepseek-official \/ deepseek-flash/)
   assert.equal(tree.children.includes(null), true, 'the card stays closed until hover or focus')
+})
+
+test('the live logo follows the dot icon setting', () => {
+  api.settings.update({ icon: 'dot' })
+  const tree = api.live({
+    route: { provider: 'deepseek-official', model: 'deepseek-flash' },
+    t,
+  })
+  const span = tree.children.find(child => child.type === 'span')
+  assert.ok(span)
+  assert.equal(span.children[0].type, api.dotGlyph)
+})
+
+test('the live description follows the minimal detail setting', () => {
+  api.settings.update({ detail: 'minimal' })
+  const tree = api.live({
+    route: { provider: 'deepseek-official', model: 'deepseek-flash' },
+    t,
+  })
+  const span = tree.children.find(child => child.type === 'span')
+  const hidden = span.children.find(child => child.type === 'span' && child.props.className === 'ppp_sr')
+  const text = hidden.children.join(' ')
+  assert.match(text, /^(Peak|Off-peak) rate/)
+  assert.match(text, /\nNext: /)
+  assert.equal(text.includes('DeepSeek route'), false)
+  assert.equal(text.includes('Beijing:'), false)
 })
